@@ -249,6 +249,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
     buf->pool = (GstVpeBufferPool *)
         gst_mini_object_ref (GST_MINI_OBJECT (pool));
   }
+  VPE_DEBUG ("Queueing buffer, fd: %d", buf->v4l2_buf.m.planes[0].m.fd);
   q_cnt = 0;
   GST_TIME_TO_TIMEVAL (GST_BUFFER_TIMESTAMP (GST_BUFFER (buf)),
       buf->v4l2_buf.timestamp);
@@ -266,7 +267,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
     base_index = (buffer.index << 2);
 
     if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buf), GST_VIDEO_BUFFER_TFF)) {
-      VPE_LOG ("Queueing top field first");
+      VPE_DEBUG ("Queueing top field first");
       buffer.field = V4L2_FIELD_TOP;
       buffer.index = base_index;
       /* QUEUE this buffer into the driver */
@@ -297,15 +298,13 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
       q_cnt++;
       gst_buffer_ref (GST_BUFFER (buf));
       if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buf), GST_VIDEO_BUFFER_RFF)) {
-        VPE_LOG ("Queueing top field (repeating)");
+        VPE_DEBUG ("Queueing top field (repeating)");
         buffer = buf->v4l2_buf;
         buffer.timestamp.tv_sec = (time_t) - 1;
         buffer.m.planes = buf_planes;
         buf_planes[0] = buf->v4l2_planes[0];
         buf_planes[1] = buf->v4l2_planes[1];
         buffer.field = V4L2_FIELD_TOP;
-        buf_planes[0].data_offset -= field_offset;
-        buf_planes[1].data_offset -= (field_offset >> 1);
         buffer.index = base_index + 2;
         /* QUEUE this buffer into the driver */
         ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
@@ -318,7 +317,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
         gst_buffer_ref (GST_BUFFER (buf));
       }
     } else {
-      VPE_LOG ("Queueing bottom field first");
+      VPE_DEBUG ("Queueing bottom field first");
       buffer.field = V4L2_FIELD_BOTTOM;
       buf_planes[0].data_offset += field_offset;
       buf_planes[1].data_offset += (field_offset >> 1);
@@ -339,8 +338,6 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
       buf_planes[1] = buf->v4l2_planes[1];
       buffer.field = V4L2_FIELD_TOP;
       buffer.index = base_index;
-      buf_planes[0].data_offset -= field_offset;
-      buf_planes[1].data_offset -= (field_offset >> 1);
       /* QUEUE this buffer into the driver */
       ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
       if (ret < 0) {
@@ -351,7 +348,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
       q_cnt++;
       gst_buffer_ref (GST_BUFFER (buf));
       if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buf), GST_VIDEO_BUFFER_RFF)) {
-        VPE_LOG ("Queueing bottom field (repeating)");
+        VPE_DEBUG ("Queueing bottom field (repeating)");
         buffer = buf->v4l2_buf;
         buffer.timestamp.tv_sec = (time_t) - 1;
         buffer.m.planes = buf_planes;

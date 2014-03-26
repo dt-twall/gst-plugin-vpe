@@ -62,7 +62,8 @@ enum
 
 #define MAX_NUM_OUTBUFS   12
 #define MAX_NUM_INBUFS    24
-
+#define DEFAULT_NUM_OUTBUFS   8
+#define DEFAULT_NUM_INBUFS    20
 
 static gboolean
 gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
@@ -332,6 +333,8 @@ gst_vpe_output_loop (gpointer data)
 
   buf = gst_vpe_buffer_pool_dequeue (self->output_pool);
   if (buf) {
+    GST_DEBUG_OBJECT (self, "push: %" GST_TIME_FORMAT " (%d bytes, ptr %p)",
+        GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (buf)), GST_BUFFER_SIZE (buf), buf);
     gst_pad_push (self->srcpad, GST_BUFFER (buf));
   } else {
     /* Try dequeueing some buffers while we are here */
@@ -750,7 +753,7 @@ gst_vpe_change_state (GstElement * element, GstStateChange transition)
 
   switch (transition) {
     case GST_STATE_CHANGE_PAUSED_TO_READY:
-      gst_vpe_set_streaming (self, FALSE);
+      gst_vpe_set_flushing (self, TRUE);
       break;
     case GST_STATE_CHANGE_READY_TO_NULL:
       self->state = GST_VPE_ST_DEINIT;
@@ -855,7 +858,7 @@ gst_vpe_class_init (GstVpeClass * klass)
           "the upstream element's requirement. For example, if gst-ducati-plugin "
           "is the upstream element, this value should be based on max-reorder-frames "
           "property of that element.",
-          3, MAX_NUM_INBUFS, MAX_NUM_INBUFS,
+          3, MAX_NUM_INBUFS, DEFAULT_NUM_INBUFS,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   g_object_class_install_property (gobject_class, PROP_NUM_OUTPUT_BUFFERS,
@@ -864,7 +867,7 @@ gst_vpe_class_init (GstVpeClass * klass)
           "The number if output buffers allocated should be specified based on "
           "the downstream element's requirement. It is generally set to the minimum "
           "value acceptable to the downstream element to reduce memory usage.",
-          3, MAX_NUM_OUTBUFS, MAX_NUM_OUTBUFS,
+          3, MAX_NUM_OUTBUFS, DEFAULT_NUM_OUTBUFS,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
@@ -915,8 +918,8 @@ gst_vpe_init (GstVpe * self, GstVpeClass * klass)
   self->input_caps = NULL;
   self->output_caps = NULL;
 
-  self->num_input_buffers = MAX_NUM_INBUFS;
-  self->num_output_buffers = MAX_NUM_OUTBUFS;
+  self->num_input_buffers = DEFAULT_NUM_INBUFS;
+  self->num_output_buffers = DEFAULT_NUM_OUTBUFS;
 }
 
 GST_DEBUG_CATEGORY (gst_vpe_debug);
