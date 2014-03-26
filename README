@@ -1,0 +1,23 @@
+WHAT IT IS
+----------
+
+gst-vpe is a GStreamer plugin for using the hw accellerated video
+scaling, color-conversion and de-interlacing using the V2L2 M2M 
+driver.
+
+Dependencies
+------------
+
+- gstreamer
+- gst-plugins-base
+- gst-plugins-good
+- libdce
+- libomap_drm
+
+TO BUILD:
+---------
+
+TODO
+----
+
+
