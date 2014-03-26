@@ -63,7 +63,7 @@ enum
 #define MAX_NUM_OUTBUFS   12
 #define MAX_NUM_INBUFS    24
 #define DEFAULT_NUM_OUTBUFS   8
-#define DEFAULT_NUM_INBUFS    20
+#define DEFAULT_NUM_INBUFS    24
 
 static gboolean
 gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
