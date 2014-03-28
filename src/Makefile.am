@@ -2,6 +2,7 @@ plugin_LTLIBRARIES = libgstvpe.la
 
 # headers we need but don't want installed
 noinst_HEADERS = \
+	gstvpebins.h \
 	gstvpe.h
 
 # sources used to compile this plug-in
@@ -9,6 +10,7 @@ libgstvpe_la_SOURCES = \
 	gstvpe.c \
 	gstvpebuffer.c \
 	gstvpebufferpool.c \
+	gstvpebins.c \
 	$(noinst_HEADERS)
 
 # compiler and linker flags used to compile this plugin, set in configure.ac

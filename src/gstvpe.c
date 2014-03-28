@@ -60,7 +60,7 @@ enum
 };
 
 
-#define MAX_NUM_OUTBUFS   12
+#define MAX_NUM_OUTBUFS   16
 #define MAX_NUM_INBUFS    24
 #define DEFAULT_NUM_OUTBUFS   8
 #define DEFAULT_NUM_INBUFS    24
@@ -329,16 +329,18 @@ static void
 gst_vpe_output_loop (gpointer data)
 {
   GstVpe *self = (GstVpe *) data;
-  GstVpeBuffer *buf;
+  GstVpeBuffer *buf = NULL;
 
-  buf = gst_vpe_buffer_pool_dequeue (self->output_pool);
+  if (self->output_pool)
+    buf = gst_vpe_buffer_pool_dequeue (self->output_pool);
   if (buf) {
     GST_DEBUG_OBJECT (self, "push: %" GST_TIME_FORMAT " (%d bytes, ptr %p)",
         GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (buf)), GST_BUFFER_SIZE (buf), buf);
     gst_pad_push (self->srcpad, GST_BUFFER (buf));
   } else {
     /* Try dequeueing some buffers while we are here */
-    gst_vpe_try_dequeue (self->input_pool);
+    if (self->input_pool)
+      gst_vpe_try_dequeue (self->input_pool);
     usleep (10000);
   }
 }
@@ -697,7 +699,7 @@ gst_vpe_event (GstPad * pad, GstEvent * event)
 
   if (ret)
     ret = gst_pad_push_event (self->srcpad, event);
-  GST_DEBUG_OBJECT (self, "end");
+  GST_DEBUG_OBJECT (self, "end ret=%d", ret);
 
   return ret;
 }
@@ -830,7 +832,7 @@ gst_vpe_base_init (gpointer gclass)
 
   gst_element_class_set_details_simple (element_class,
       "vpe",
-      "Codec/Encoder/Video",
+      "Filter/Converter/Video",
       "Video processing adapter", "Harinarayan Bhatta <harinarayan@ti.com>");
 
   gst_element_class_add_pad_template (element_class,
@@ -924,12 +926,24 @@ gst_vpe_init (GstVpe * self, GstVpeClass * klass)
 
 GST_DEBUG_CATEGORY (gst_vpe_debug);
 
+#include "gstvpebins.h"
+
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
   GST_DEBUG_CATEGORY_INIT (gst_vpe_debug, "vpe", 0, "vpe");
 
-  return gst_element_register (plugin, "vpe", GST_RANK_PRIMARY, GST_TYPE_VPE);
+  return (gst_element_register (plugin, "vpe", GST_RANK_NONE, GST_TYPE_VPE) &&
+      gst_element_register (plugin, "ducatih264decvpe", GST_RANK_PRIMARY + 1,
+          gst_vpe_ducatih264dec_get_type ()) &&
+      gst_element_register (plugin, "ducatimpeg2decvpe", GST_RANK_PRIMARY + 1,
+          gst_vpe_ducatimpeg2dec_get_type ()) &&
+      gst_element_register (plugin, "ducatimpeg4decvpe", GST_RANK_PRIMARY + 1,
+          gst_vpe_ducatimpeg4dec_get_type ()) &&
+      gst_element_register (plugin, "ducatijpegdecvpe", GST_RANK_PRIMARY + 2,
+          gst_vpe_ducatijpegdec_get_type ()) &&
+      gst_element_register (plugin, "ducativc1decvpe", GST_RANK_PRIMARY + 2,
+          gst_vpe_ducativc1dec_get_type ()));
 }
 
 /* PACKAGE: this is usually set by autotools depending on some _INIT macro
@@ -938,9 +952,9 @@ plugin_init (GstPlugin * plugin)
  * compile this code. GST_PLUGIN_DEFINE needs PACKAGE to be defined.
  */
 #ifndef PACKAGE
-#define PACKAGE "vpe"
+#define PACKAGE "vpeplugin"
 #endif
 
-GST_PLUGIN_DEFINE (GST_VERSION_MAJOR, GST_VERSION_MINOR, "vpe",
-    "Hardware accelerated video processing using TI VPE V4L2 driver on DRA7x processors",
+GST_PLUGIN_DEFINE (GST_VERSION_MAJOR, GST_VERSION_MINOR, "vpeplugin",
+    "Hardware accelerated video porst-processing using TI VPE (V4L2-M2M) driver on DRA7x SoC",
     plugin_init, VERSION, "LGPL", "GStreamer", "http://gstreamer.net/")
