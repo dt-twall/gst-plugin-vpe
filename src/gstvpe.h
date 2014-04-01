@@ -83,6 +83,7 @@ struct _GstVpeBufferPool
   gint video_fd;                /* a dup(2) of the v4l2object's video_fd */
   guint32 v4l2_type;
   guint buffer_count;
+  guint32 last_field_pushed;    /* Was the last field sent to the dirver top of bottom */
   struct GstVpeBufferPoolBufTracking
   {
     GstVpeBuffer *buf;          /* Buffers that are part of this pool */

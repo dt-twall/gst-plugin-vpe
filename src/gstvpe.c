@@ -942,7 +942,7 @@ plugin_init (GstPlugin * plugin)
           gst_vpe_ducatimpeg4dec_get_type ()) &&
       gst_element_register (plugin, "ducatijpegdecvpe", GST_RANK_PRIMARY + 2,
           gst_vpe_ducatijpegdec_get_type ()) &&
-      gst_element_register (plugin, "ducativc1decvpe", GST_RANK_PRIMARY + 2,
+      gst_element_register (plugin, "ducativc1decvpe", GST_RANK_PRIMARY + 1,
           gst_vpe_ducativc1dec_get_type ()));
 }
 

@@ -72,13 +72,11 @@ gst_vpe_buffer_pool_finalize (GObject * obj)
 {
   GstVpeBufferPool *pool = GST_VPE_BUFFER_POOL (obj);
 
-  VPE_DEBUG ("gst_vpe_buffer_pool_finalize( buffer_count = %d )",
-      pool->buffer_count);
-
+  VPE_DEBUG ("gst_vpe_buffer_pool_finalize (%s) done",
+      pool->output_port ? "output" : "input");
   g_free (pool->buf_tracking);
   g_mutex_clear (&pool->lock);
   g_cond_clear (&pool->cond);
-  close (pool->video_fd);
 
   GST_MINI_OBJECT_CLASS (parent_class)->finalize (GST_MINI_OBJECT (pool));
 }
@@ -267,8 +265,16 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
     base_index = (buffer.index << 2);
 
     if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buf), GST_VIDEO_BUFFER_TFF)) {
-      VPE_DEBUG ("Queueing top field first");
-      buffer.field = V4L2_FIELD_TOP;
+      if (pool->last_field_pushed == 0)
+        pool->last_field_pushed = V4L2_FIELD_BOTTOM;
+      if (pool->last_field_pushed == V4L2_FIELD_TOP) {
+        VPE_WARNING
+            ("Top field was last pushed to the driver, same one turned up again");
+        ret = 0;
+        break;
+      }
+      VPE_DEBUG ("Queueing V4L2_FIELD_TOP first");
+      pool->last_field_pushed = buffer.field = V4L2_FIELD_TOP;
       buffer.index = base_index;
       /* QUEUE this buffer into the driver */
       ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
@@ -279,12 +285,13 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
       }
       q_cnt++;
 
+      VPE_DEBUG ("Queueing V4L2_FIELD_BOTTOM");
       buffer = buf->v4l2_buf;
       buffer.timestamp.tv_sec = (time_t) - 1;
       buffer.m.planes = buf_planes;
       buf_planes[0] = buf->v4l2_planes[0];
       buf_planes[1] = buf->v4l2_planes[1];
-      buffer.field = V4L2_FIELD_BOTTOM;
+      pool->last_field_pushed = buffer.field = V4L2_FIELD_BOTTOM;
       buf_planes[0].data_offset += field_offset;
       buf_planes[1].data_offset += (field_offset >> 1);
       buffer.index = base_index + 1;
@@ -298,13 +305,13 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
       q_cnt++;
       gst_buffer_ref (GST_BUFFER (buf));
       if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buf), GST_VIDEO_BUFFER_RFF)) {
-        VPE_DEBUG ("Queueing top field (repeating)");
+        VPE_DEBUG ("Queueing V4L2_FIELD_TOP (repeating)");
         buffer = buf->v4l2_buf;
         buffer.timestamp.tv_sec = (time_t) - 1;
         buffer.m.planes = buf_planes;
         buf_planes[0] = buf->v4l2_planes[0];
         buf_planes[1] = buf->v4l2_planes[1];
-        buffer.field = V4L2_FIELD_TOP;
+        pool->last_field_pushed = buffer.field = V4L2_FIELD_TOP;
         buffer.index = base_index + 2;
         /* QUEUE this buffer into the driver */
         ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
@@ -317,8 +324,16 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
         gst_buffer_ref (GST_BUFFER (buf));
       }
     } else {
-      VPE_DEBUG ("Queueing bottom field first");
-      buffer.field = V4L2_FIELD_BOTTOM;
+      if (pool->last_field_pushed == 0)
+        pool->last_field_pushed = V4L2_FIELD_TOP;
+      if (pool->last_field_pushed == V4L2_FIELD_BOTTOM) {
+        VPE_WARNING
+            ("Bottom field was last pushed to the driver, same one turned up again");
+        ret = 0;
+        break;
+      }
+      VPE_DEBUG ("Queueing V4L2_FIELD_BOTTOM first");
+      pool->last_field_pushed = buffer.field = V4L2_FIELD_BOTTOM;
       buf_planes[0].data_offset += field_offset;
       buf_planes[1].data_offset += (field_offset >> 1);
       buffer.index = base_index + 1;
@@ -331,12 +346,13 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
       }
       q_cnt++;
 
+      VPE_DEBUG ("Queueing V4L2_FIELD_TOP");
       buffer = buf->v4l2_buf;
       buffer.timestamp.tv_sec = (time_t) - 1;
       buffer.m.planes = buf_planes;
       buf_planes[0] = buf->v4l2_planes[0];
       buf_planes[1] = buf->v4l2_planes[1];
-      buffer.field = V4L2_FIELD_TOP;
+      pool->last_field_pushed = buffer.field = V4L2_FIELD_TOP;
       buffer.index = base_index;
       /* QUEUE this buffer into the driver */
       ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
@@ -348,13 +364,13 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
       q_cnt++;
       gst_buffer_ref (GST_BUFFER (buf));
       if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buf), GST_VIDEO_BUFFER_RFF)) {
-        VPE_DEBUG ("Queueing bottom field (repeating)");
+        VPE_DEBUG ("Queueing V4L2_FIELD_BOTTOM (repeating)");
         buffer = buf->v4l2_buf;
         buffer.timestamp.tv_sec = (time_t) - 1;
         buffer.m.planes = buf_planes;
         buf_planes[0] = buf->v4l2_planes[0];
         buf_planes[1] = buf->v4l2_planes[1];
-        buffer.field = V4L2_FIELD_BOTTOM;
+        pool->last_field_pushed = buffer.field = V4L2_FIELD_BOTTOM;
         buf_planes[0].data_offset += field_offset;
         buf_planes[1].data_offset += (field_offset >> 1);
         buffer.index = base_index + 3;
@@ -386,6 +402,9 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
   }
   GST_VPE_BUFFER_POOL_UNLOCK (pool);
 
+  if (0 == q_cnt)
+    gst_buffer_unref (GST_BUFFER (buf));
+
   return (ret == 0) ? TRUE : FALSE;
 }
 
@@ -407,7 +426,7 @@ gst_vpe_buffer_pool_get (GstVpeBufferPool * pool)
       if (pool->buf_tracking[i].state == BUF_FREE) {
         ret = pool->buf_tracking[i].buf;
         pool->buf_tracking[i].state = BUF_ALLOCATED;
-        pool->buf_tracking[i].q_cnt = 1;
+        pool->buf_tracking[i].q_cnt = 0;
         break;
       }
     }
@@ -439,11 +458,16 @@ gst_vpe_buffer_pool_destroy (GstVpeBufferPool * pool)
 
   pool->shutting_down = TRUE;
 
+  close (pool->video_fd);
+
   /* Un-block anyone waiting for buffers */
   GST_VPE_BUFFER_POOL_SIGNAL (pool);
 
   for (i = 0; i < pool->buffer_count; i++) {
     buf = pool->buf_tracking[i].buf;
+    VPE_DEBUG ("Freeing %s buffers: %d, q_cnt: %d, state: %d",
+        pool->output_port ? "output" : "input", i,
+        pool->buf_tracking[i].q_cnt, pool->buf_tracking[i].state);
     pool->buf_tracking[i].state = BUF_ALLOCATED;
     q_cnt = pool->buf_tracking[i].q_cnt;
     pool->buf_tracking[i].q_cnt = 0;
