@@ -79,7 +79,8 @@ struct _GstVpeBufferPool
   gboolean output_port;         /* if true, unusued buffers are automatically re-QBUF'd */
   GMutex lock;
   GCond cond;
-  gboolean shutting_down, streaming, flushing;
+  gboolean shutting_down, streaming, flushing;  /* States */
+  gboolean interlaced;          /* Whether input is interlaced */
   gint video_fd;                /* a dup(2) of the v4l2object's video_fd */
   guint32 v4l2_type;
   guint buffer_count;
@@ -129,7 +130,7 @@ GstVpeBuffer *gst_vpe_buffer_pool_get (GstVpeBufferPool * pool);
 void gst_vpe_buffer_pool_destroy (GstVpeBufferPool * pool);
 
 gboolean gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool,
-    gboolean streaming);
+    gboolean streaming, gboolean interlaced);
 
 gboolean gst_vpe_buffer_pool_set_flushing (GstVpeBufferPool * pool,
     gboolean flushing);

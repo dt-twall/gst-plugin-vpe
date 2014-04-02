@@ -250,8 +250,6 @@ gst_vpe_init_input_buffers (GstVpe * self)
 {
   int i;
   GstVpeBuffer *buf;
-  struct v4l2_format fmt;
-  int ret;
 
   self->input_pool = gst_vpe_buffer_pool_new (self->video_fd,
       FALSE, self->num_input_buffers, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
@@ -273,23 +271,36 @@ gst_vpe_init_input_buffers (GstVpe * self)
     /* gst_vpe_buffer_pool_put function keeps a reference, so give up ours */
     gst_buffer_unref (GST_BUFFER (buf));
   }
+  return TRUE;
+}
+
+static gboolean
+gst_vpe_input_set_fmt (GstVpe * self)
+{
+  struct v4l2_format fmt;
+  int ret;
 
   // V4L2 Stuff
   bzero (&fmt, sizeof (fmt));
   fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
   fmt.fmt.pix_mp.width = self->input_width;
   fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_NV12;
+  if (self->interlaced) {
 #ifdef GST_VPE_USE_FIELD_ALTERNATE
-  fmt.fmt.pix_mp.height = (self->input_height >> 1);
-  fmt.fmt.pix_mp.field = V4L2_FIELD_ALTERNATE;
+    fmt.fmt.pix_mp.height = (self->input_height >> 1);
+    fmt.fmt.pix_mp.field = V4L2_FIELD_ALTERNATE;
 #else
-  fmt.fmt.pix_mp.height = self->input_height;
-  fmt.fmt.pix_mp.field = V4L2_FIELD_SEQ_TB;
-  // HACK: bottom-field first is not yet supported 
+    fmt.fmt.pix_mp.height = self->input_height;
+    fmt.fmt.pix_mp.field = V4L2_FIELD_SEQ_TB;
 #endif
+  } else {
+    fmt.fmt.pix_mp.height = self->input_height;
+    fmt.fmt.pix_mp.field = V4L2_FIELD_ANY;
+  }
 
-  GST_DEBUG_OBJECT (self, "vpe: input S_FMT image: %dx%d, numbufs: %d",
-      fmt.fmt.pix_mp.width, fmt.fmt.pix_mp.height, self->num_input_buffers);
+  GST_DEBUG_OBJECT (self, "input S_FMT field: %d, image: %dx%d, numbufs: %d",
+      fmt.fmt.pix_mp.field, fmt.fmt.pix_mp.width,
+      fmt.fmt.pix_mp.height, self->num_input_buffers);
 
   ret = ioctl (self->video_fd, VIDIOC_S_FMT, &fmt);
   if (ret < 0) {
@@ -421,13 +432,14 @@ gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
 {
   gboolean ret;
   if (self->input_pool)
-    gst_vpe_buffer_pool_set_streaming (self->input_pool, streaming);
+    gst_vpe_buffer_pool_set_streaming (self->input_pool, streaming,
+        self->interlaced);
   if (self->output_pool) {
     if (!streaming) {
       ret = gst_pad_stop_task (self->srcpad);
       GST_DEBUG_OBJECT (self, "gst_pad_stop_task returned %d", ret);
     }
-    gst_vpe_buffer_pool_set_streaming (self->output_pool, streaming);
+    gst_vpe_buffer_pool_set_streaming (self->output_pool, streaming, FALSE);
     if (streaming) {
       ret = gst_pad_start_task (self->srcpad, gst_vpe_output_loop, self);
       GST_DEBUG_OBJECT (self, "gst_pad_start_task returned %d", ret);
@@ -440,6 +452,11 @@ gst_vpe_start (GstVpe * self, GstCaps * input_caps)
 {
   if (!gst_vpe_init_input (self, input_caps)) {
     GST_ERROR_OBJECT (self, "gst_vpe_init_input failed");
+    return FALSE;
+  }
+
+  if (!gst_vpe_input_set_fmt (self)) {
+    GST_ERROR_OBJECT (self, "gst_vpe_input_set_fmt failed");
     return FALSE;
   }
 
