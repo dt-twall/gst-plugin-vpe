@@ -62,7 +62,7 @@ enum
 
 #define MAX_NUM_OUTBUFS   16
 #define MAX_NUM_INBUFS    24
-#define DEFAULT_NUM_OUTBUFS   8
+#define DEFAULT_NUM_OUTBUFS   6
 #define DEFAULT_NUM_INBUFS    24
 
 static gboolean
@@ -242,18 +242,18 @@ gst_vpe_output_set_fmt (GstVpe * self)
 }
 
 static gboolean
-gst_vpe_init_input_buffers (GstVpe * self)
+gst_vpe_init_input_buffers (GstVpe * self, gint num_input_buffers)
 {
   int i;
   GstVpeBuffer *buf;
   self->input_pool =
-      gst_vpe_buffer_pool_new (FALSE, self->num_input_buffers,
+      gst_vpe_buffer_pool_new (FALSE, num_input_buffers,
       V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
   if (!self->input_pool) {
     return FALSE;
   }
 
-  for (i = 0; i < self->num_input_buffers; i++) {
+  for (i = 0; i < num_input_buffers; i++) {
     buf = gst_vpe_buffer_new (self->dev,
         GST_MAKE_FOURCC ('N', 'V', '1', '2'),
         self->input_width, self->input_height, i,
@@ -379,6 +379,8 @@ gst_vpe_create (GstVpe * self)
 static gboolean
 gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
 {
+  gint num_input_buffers;
+
   if (!gst_vpe_create (self)) {
     return FALSE;
   }
@@ -387,9 +389,22 @@ gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
     GST_ERROR_OBJECT (self, "Could not parse/set caps");
     return FALSE;
   }
+  if (self->num_input_buffers) {
+    num_input_buffers = self->num_input_buffers;
+  } else {
+    /* Determine automatically. use a thumb rule size limit of less than 16MB
+     * or number of buffers to 22 */
+    num_input_buffers = ((16 * 1024 * 1024 * 2) /
+        (self->input_height * self->input_width * 3));
+    if (num_input_buffers > 16)
+      num_input_buffers = 16;
+    num_input_buffers += 6;
+    GST_WARNING_OBJECT (self, "Using automatically determined number "
+        "of input buffers: %d", num_input_buffers);
+  }
   GST_DEBUG_OBJECT (self, "parse/set caps done");
   if (self->input_pool == NULL) {
-    if (!gst_vpe_init_input_buffers (self)) {
+    if (!gst_vpe_init_input_buffers (self, num_input_buffers)) {
       GST_ERROR_OBJECT (self, "gst_vpe_init_input_buffers failed");
       return FALSE;
     }
@@ -770,6 +785,9 @@ gst_vpe_change_state (GstElement * element, GstStateChange transition)
     goto leave;
   switch (transition) {
     case GST_STATE_CHANGE_PAUSED_TO_READY:
+      GST_OBJECT_LOCK (self);
+      gst_vpe_set_streaming (self, FALSE);
+      GST_OBJECT_UNLOCK (self);
       break;
     case GST_STATE_CHANGE_READY_TO_NULL:
       GST_OBJECT_LOCK (self);
@@ -866,10 +884,11 @@ gst_vpe_class_init (GstVpeClass * klass)
           "The number if input buffers allocated should be specified based on "
           "the upstream element's requirement. For example, if gst-ducati-plugin "
           "is the upstream element, this value should be based on max-reorder-frames "
-          "property of that element.", 3, MAX_NUM_INBUFS,
-          DEFAULT_NUM_INBUFS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-  g_object_class_install_property (gobject_class,
-      PROP_NUM_OUTPUT_BUFFERS, g_param_spec_int ("num-output-buffers",
+          "property of that element. 0 => decide automatically", 0,
+          MAX_NUM_INBUFS, DEFAULT_NUM_INBUFS,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_NUM_OUTPUT_BUFFERS,
+      g_param_spec_int ("num-output-buffers",
           "Number of output buffers that are allocated and used by this plugin.",
           "The number if output buffers allocated should be specified based on "
           "the downstream element's requirement. It is generally set to the minimum "
