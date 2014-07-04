@@ -392,13 +392,20 @@ gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
   if (self->num_input_buffers) {
     num_input_buffers = self->num_input_buffers;
   } else {
-    /* Determine automatically. use a thumb rule size limit of less than 16MB
-     * or number of buffers to 22 */
-    num_input_buffers = ((16 * 1024 * 1024 * 2) /
-        (self->input_height * self->input_width * 3));
-    if (num_input_buffers > 16)
-      num_input_buffers = 16;
-    num_input_buffers += 6;
+    if (self->segment.format == GST_FORMAT_TIME &&
+        self->segment.rate < (gdouble) 0.0) {
+      /* Reverse playback needs as many buffers as possible,
+         so go for maximum */
+      num_input_buffers = 32;
+    } else {
+      /* Determine automatically. use a thumb rule size limit of less than 16MB
+       * or number of buffers to 22 */
+      num_input_buffers = ((16 * 1024 * 1024 * 2) /
+          (self->input_height * self->input_width * 3));
+      if (num_input_buffers > 16)
+        num_input_buffers = 16;
+      num_input_buffers += 6;
+    }
     GST_WARNING_OBJECT (self, "Using automatically determined number "
         "of input buffers: %d", num_input_buffers);
   }
@@ -459,21 +466,25 @@ gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
 static gboolean
 gst_vpe_start (GstVpe * self, GstCaps * input_caps)
 {
-  if (!gst_vpe_init_input_bufs (self, input_caps)) {
-    GST_ERROR_OBJECT (self, "gst_vpe_init_input_bufs failed");
-    return FALSE;
+  if (!self->input_pool) {
+    if (!gst_vpe_init_input_bufs (self, input_caps)) {
+      GST_ERROR_OBJECT (self, "gst_vpe_init_input_bufs failed");
+      return FALSE;
+    }
   }
 
-  if (!gst_vpe_set_output_caps (self)) {
-    GST_ERROR_OBJECT (self, "gst_vpe_set_output_caps failed");
-    return FALSE;
-  }
+  if (!self->output_pool) {
+    if (!gst_vpe_set_output_caps (self)) {
+      GST_ERROR_OBJECT (self, "gst_vpe_set_output_caps failed");
+      return FALSE;
+    }
 
-  if (!gst_vpe_init_output_buffers (self)) {
-    GST_ERROR_OBJECT (self, "gst_vpe_init_output_buffers failed");
-    return FALSE;
+    if (!gst_vpe_init_output_buffers (self)) {
+      GST_ERROR_OBJECT (self, "gst_vpe_init_output_buffers failed");
+      return FALSE;
+    }
+    GST_DEBUG_OBJECT (self, "gst_vpe_init_output_buffers done");
   }
-  GST_DEBUG_OBJECT (self, "gst_vpe_init_output_buffers done");
 
   gst_vpe_set_streaming (self, TRUE);
   self->state = GST_VPE_ST_ACTIVE;
@@ -508,6 +519,7 @@ gst_vpe_destroy (GstVpe * self)
   if (self->dev)
     dce_deinit (self->dev);
   GST_DEBUG_OBJECT (self, "dce_deinit done");
+  gst_segment_init (&self->segment, GST_FORMAT_UNDEFINED);
   self->dev = NULL;
   self->input_width = 0;
   self->input_height = 0;
@@ -696,6 +708,17 @@ gst_vpe_event (GstPad * pad, GstEvent * event)
   GST_DEBUG_OBJECT (self, "begin: event=%s", GST_EVENT_TYPE_NAME (event));
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_NEWSEGMENT:
+    {
+      gboolean update;
+      GstFormat fmt;
+      gint64 start, stop, time;
+      gdouble rate, arate;
+
+      gst_event_parse_new_segment_full (event, &update, &rate, &arate, &fmt,
+          &start, &stop, &time);
+      gst_segment_set_newsegment_full (&self->segment, update,
+          rate, arate, fmt, start, stop, time);
+    }
       break;
     case GST_EVENT_CROP:
     {
@@ -715,26 +738,32 @@ gst_vpe_event (GstPad * pad, GstEvent * event)
         ioctl (self->video_fd, VIDIOC_S_CROP, &self->input_crop);
       }
       GST_OBJECT_UNLOCK (self);
+      gst_event_unref (event);
       return TRUE;
     }
     case GST_EVENT_EOS:
       break;
     case GST_EVENT_FLUSH_STOP:
       GST_OBJECT_LOCK (self);
-      gst_vpe_set_streaming (self, TRUE);
+      if (self->input_pool) {
+        gst_vpe_buffer_pool_destroy (self->input_pool);
+        GST_DEBUG_OBJECT (self, "gst_vpe_buffer_pool_destroy(input) done");
+      }
+      self->input_pool = NULL;
+      self->state = GST_VPE_ST_INIT;
       GST_OBJECT_UNLOCK (self);
       break;
     case GST_EVENT_FLUSH_START:
       GST_OBJECT_LOCK (self);
       gst_vpe_set_streaming (self, FALSE);
+      self->state = GST_VPE_ST_DEINIT;
       GST_OBJECT_UNLOCK (self);
       break;
     default:
       break;
   }
 
-  if (ret)
-    ret = gst_pad_push_event (self->srcpad, event);
+  ret = gst_pad_push_event (self->srcpad, event);
   GST_DEBUG_OBJECT (self, "end ret=%d", ret);
   return ret;
 }
@@ -787,11 +816,11 @@ gst_vpe_change_state (GstElement * element, GstStateChange transition)
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       GST_OBJECT_LOCK (self);
       gst_vpe_set_streaming (self, FALSE);
+      self->state = GST_VPE_ST_DEINIT;
       GST_OBJECT_UNLOCK (self);
       break;
     case GST_STATE_CHANGE_READY_TO_NULL:
       GST_OBJECT_LOCK (self);
-      self->state = GST_VPE_ST_DEINIT;
       gst_vpe_destroy (self);
       GST_OBJECT_UNLOCK (self);
       break;
@@ -901,9 +930,7 @@ static void
 gst_vpe_init (GstVpe * self, GstVpeClass * klass)
 {
   GstElementClass *gstelement_class = GST_ELEMENT_CLASS (klass);
-  self->sinkpad =
-      gst_pad_new_from_template (gst_element_class_get_pad_template
-      (gstelement_class, "sink"), "sink");
+  self->sinkpad = gst_pad_new_from_static_template (&sink_factory, "sink");
   gst_pad_set_setcaps_function (self->sinkpad,
       GST_DEBUG_FUNCPTR (gst_vpe_sink_setcaps));
   gst_pad_set_chain_function (self->sinkpad, GST_DEBUG_FUNCPTR (gst_vpe_chain));
@@ -938,6 +965,7 @@ gst_vpe_init (GstVpe * self, GstVpeClass * klass)
   self->output_caps = NULL;
   self->num_input_buffers = DEFAULT_NUM_INBUFS;
   self->num_output_buffers = DEFAULT_NUM_OUTBUFS;
+  gst_segment_init (&self->segment, GST_FORMAT_UNDEFINED);
 }
 
 GST_DEBUG_CATEGORY (gst_vpe_debug);

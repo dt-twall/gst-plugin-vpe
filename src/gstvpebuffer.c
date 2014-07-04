@@ -58,13 +58,13 @@ gst_vpe_buffer_finalize (GObject * obj)
   if (buf->pool) {
     /* Put the buffer back into the pool */
     if (gst_vpe_buffer_pool_put (buf->pool, buf)) {
-      VPE_DEBUG ("Recycled VPE buffer, index: %d, type: %d",
-          buf->v4l2_buf.index, buf->v4l2_buf.type);
+      VPE_DEBUG ("Recycled VPE buffer, index: %d, type: %d fd: %d",
+          buf->v4l2_buf.index, buf->v4l2_buf.type, buf->v4l2_planes[0].m.fd);
       return;
     }
   }
-  VPE_DEBUG ("Free VPE buffer, index: %d, type: %d",
-      buf->v4l2_buf.index, buf->v4l2_buf.type);
+  VPE_DEBUG ("Free VPE buffer, index: %d, type: %d fd: %d",
+      buf->v4l2_buf.index, buf->v4l2_buf.type, buf->v4l2_planes[0].m.fd);
 
   /* No pool to put back to buffer into, so delete it completely */
   if (buf->bo) {
@@ -74,8 +74,8 @@ gst_vpe_buffer_finalize (GObject * obj)
     /* Free the DRM buffer */
     omap_bo_del (buf->bo);
   }
-  GST_BUFFER_CLASS (parent_class)->mini_object_class.
-      finalize (GST_MINI_OBJECT (buf));
+  GST_BUFFER_CLASS (parent_class)->
+      mini_object_class.finalize (GST_MINI_OBJECT (buf));
 }
 
 GstVpeBuffer *

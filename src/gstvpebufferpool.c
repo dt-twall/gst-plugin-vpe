@@ -132,16 +132,20 @@ gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstVpeBuffer * buf)
       /* QUEUE this buffer into the driver */
       r = ioctl (pool->video_fd, VIDIOC_QBUF, &buf->v4l2_buf);
       if (r < 0) {
-        VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d\n",
+        VPE_ERROR ("vpebufferpool: op QBUF failed: %s, index = %d",
             strerror (errno), buf->v4l2_buf.index);
         ret = FALSE;
       } else {
+        VPE_DEBUG ("vpebufferpool: op QBUF succeeded: index = %d",
+            buf->v4l2_buf.index);
         pool->buf_tracking[buf->v4l2_buf.index].state = BUF_WITH_DRIVER;
         pool->buf_tracking[buf->v4l2_buf.index].buf =
             (GstVpeBuffer *) gst_buffer_ref (GST_BUFFER (buf));
         pool->buf_tracking[buf->v4l2_buf.index].q_cnt = 1;
       }
     } else {
+      VPE_DEBUG ("vpebufferpool: buf marked free: index = %d",
+          buf->v4l2_buf.index);
       pool->buf_tracking[buf->v4l2_buf.index].state = BUF_FREE;
       pool->buf_tracking[buf->v4l2_buf.index].buf =
           (GstVpeBuffer *) gst_buffer_ref (GST_BUFFER (buf));
@@ -182,7 +186,7 @@ gst_vpe_buffer_pool_dequeue (GstVpeBufferPool * pool)
       if (errno == EAGAIN)
         VPE_LOG ("Non-blocking DQBUF, try again");
       else
-        VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d\n",
+        VPE_ERROR ("vpebufferpool: DQBUF failed: %s, index = %d",
             strerror (errno), buf.index);
       GST_VPE_BUFFER_POOL_UNLOCK (pool);
       return NULL;
@@ -264,7 +268,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
           /* QUEUE this buffer into the driver */
           ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
           if (ret < 0) {
-            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d\n",
+            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
                 strerror (errno), buffer.index);
             break;
           }
@@ -283,7 +287,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
           /* QUEUE this buffer into the driver */
           ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
           if (ret < 0) {
-            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d\n",
+            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
                 strerror (errno), buffer.index);
             break;
           }
@@ -301,7 +305,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
             /* QUEUE this buffer into the driver */
             ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
             if (ret < 0) {
-              VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d\n",
+              VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
                   strerror (errno), buffer.index);
               break;
             }
@@ -325,7 +329,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
           /* QUEUE this buffer into the driver */
           ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
           if (ret < 0) {
-            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d\n",
+            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
                 strerror (errno), buffer.index);
             break;
           }
@@ -342,7 +346,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
           /* QUEUE this buffer into the driver */
           ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
           if (ret < 0) {
-            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d\n",
+            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
                 strerror (errno), buffer.index);
             break;
           }
@@ -362,7 +366,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
             /* QUEUE this buffer into the driver */
             ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
             if (ret < 0) {
-              VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d\n",
+              VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
                   strerror (errno), buffer.index);
               break;
             }
@@ -376,7 +380,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
         /* QUEUE this buffer into the driver */
         ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buf->v4l2_buf);
         if (ret < 0) {
-          VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d\n",
+          VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
               strerror (errno), buf->v4l2_buf.index);
           break;
         }
@@ -387,7 +391,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
         /* QUEUE this buffer into the driver */
         ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buf->v4l2_buf);
         if (ret < 0) {
-          VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d\n",
+          VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
               strerror (errno), buf->v4l2_buf.index);
           break;
         }
@@ -571,13 +575,21 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
         r = ioctl (pool->video_fd, VIDIOC_QBUF,
             &pool->buf_tracking[i].buf->v4l2_buf);
         if (r < 0) {
-          VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d\n",
+          VPE_ERROR ("vpebufferpool: op QBUF failed: %s, index = %d",
               strerror (errno), pool->buf_tracking[i].buf->v4l2_buf.index);
           ret = FALSE;
           goto DONE;
         }
+        VPE_DEBUG ("vpebufferpool: op QBUF succeeded: index = %d",
+            pool->buf_tracking[i].buf->v4l2_buf.index);
         pool->buf_tracking[i].state = BUF_WITH_DRIVER;
         pool->buf_tracking[i].q_cnt = 1;
+      }
+    } else {                    // not pool->output_port
+      for (i = 0; i < pool->buffer_count; i++) {
+        pool->buf_tracking[i].buf->v4l2_buf.bytesused = 0;
+        pool->buf_tracking[i].buf->v4l2_planes[0].bytesused = 0;
+        pool->buf_tracking[i].buf->v4l2_planes[1].bytesused = 0;
       }
     }
     VPE_DEBUG ("Start streaming for type: %d", pool->v4l2_type);

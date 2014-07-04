@@ -146,6 +146,7 @@ struct _GstVpe
   struct v4l2_crop input_crop;
   gboolean interlaced;
   gboolean passthrough;
+  GstSegment segment;
   enum
   { GST_VPE_ST_INIT, GST_VPE_ST_ACTIVE, GST_VPE_ST_DEINIT } state;
 

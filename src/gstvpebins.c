@@ -149,14 +149,17 @@ static void gst_vpe_##decoder_name##_init (type *self, type ## Class *Klass) \
   gst_bin_add_many(GST_BIN(self), dec, vpe, NULL);                           \
   gst_element_link_many(dec, vpe, NULL);                                     \
   g_object_set(G_OBJECT (vpe), "num-input-buffers", 0, NULL);                \
+  g_object_set(G_OBJECT (vpe), "num-output-buffers", 12, NULL);              \
   g_object_set(G_OBJECT (dec), "max-reorder-frames", 0, NULL);               \
   tmp = gst_element_get_static_pad(dec, "sink");                             \
   if (tmp) {                                                                 \
     sinkpad = gst_ghost_pad_new("sink", tmp);                                \
+    gst_object_unref(GST_OBJECT(tmp));                                       \
   }                                                                          \
   tmp = gst_element_get_static_pad(vpe, "src");                              \
   if (tmp) {                                                                 \
     srcpad = gst_ghost_pad_new("src", tmp);                                  \
+    gst_object_unref(GST_OBJECT(tmp));                                       \
   }                                                                          \
   if (sinkpad) {                                                             \
     gst_element_add_pad (GST_ELEMENT (self), sinkpad);                       \
