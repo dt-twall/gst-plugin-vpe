@@ -80,7 +80,7 @@ gst_vpe_buffer_finalize (GObject * obj)
 
 GstVpeBuffer *
 gst_vpe_buffer_new (struct omap_device *dev,
-    gint fourcc, gint width, gint height, int index, guint32 v4l2_type)
+    guint32 fourcc, gint width, gint height, int index, guint32 v4l2_type)
 {
   GstVpeBuffer *buf;
   GstDmaBuf *dmabuf;
@@ -107,6 +107,7 @@ gst_vpe_buffer_new (struct omap_device *dev,
       buf->v4l2_buf.length = 1;
       buf->v4l2_buf.m.planes[0].m.fd = omap_bo_dmabuf (buf->bo);
       break;
+    case GST_MAKE_FOURCC ('Y', 'U', 'Y', '2'):
     case GST_MAKE_FOURCC ('Y', 'U', 'Y', 'V'):
       size = width * height * 2;
       buf->bo = omap_bo_new (dev, size, OMAP_BO_WC);

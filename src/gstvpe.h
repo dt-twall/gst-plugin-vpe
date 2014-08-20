@@ -112,7 +112,7 @@ struct _GstVpeBufferClass
 };
 
 GstVpeBuffer *gst_vpe_buffer_new (struct omap_device *dev,
-    gint fourcc, gint width, gint height, int index, guint32 v4l2_type);
+    guint32 fourcc, gint width, gint height, int index, guint32 v4l2_type);
 
 GstVpeBufferPool *gst_vpe_buffer_pool_new (gboolean output_port,
     guint buffer_count, guint32 v4l2_type);
@@ -142,7 +142,9 @@ struct _GstVpe
   GstVpeBufferPool *input_pool, *output_pool;
   gint num_input_buffers, num_output_buffers;
   gint input_height, input_width;
+  guint32 input_fourcc;
   gint output_height, output_width;
+  guint32 output_fourcc;
   struct v4l2_crop input_crop;
   gboolean interlaced;
   gboolean passthrough;

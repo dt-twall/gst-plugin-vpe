@@ -45,12 +45,14 @@ GST_BOILERPLATE (GstVpe, gst_vpe, GstElement, GST_TYPE_ELEMENT);
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_YUV ("NV12")));
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_YUV ("NV12") ";"
+        GST_VIDEO_CAPS_YUV ("YUYV") ";" GST_VIDEO_CAPS_YUV ("YUY2")));
 
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_YUV ("NV12")));
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_YUV ("NV12") ";"
+        GST_VIDEO_CAPS_YUV ("YUYV") ";" GST_VIDEO_CAPS_YUV ("YUY2")));
 
 enum
 {
@@ -71,6 +73,7 @@ gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
   gboolean match;
   GstStructure *s;
   gint w, h;
+  guint32 fourcc;
 
   if (self->input_caps) {
     match = gst_caps_is_strictly_equal (self->input_caps, input_caps);
@@ -83,6 +86,10 @@ gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
 
   s = gst_caps_get_structure (input_caps, 0);
 
+  if (!gst_structure_get_fourcc (s, "format", &fourcc)) {
+    return FALSE;
+  }
+
   /* For interlaced streams, ducati decoder sets caps without the interlaced 
    * at first, and then changes it to set it as true or false, so if interlaced
    * is false, we cannot assume that the stream is pass-through
@@ -90,7 +97,6 @@ gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
   self->interlaced = FALSE;
   gst_structure_get_boolean (s, "interlaced", &self->interlaced);
 
-  /* assuming NV12 input and output */
   if (!(gst_structure_get_int (s, "width", &w) &&
           gst_structure_get_int (s, "height", &h))) {
     return FALSE;
@@ -104,6 +110,7 @@ gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
   }
   self->input_height = h;
   self->input_width = w;
+  self->input_fourcc = fourcc;
 
   /* Keep a copy of input caps */
   if (self->input_caps)
@@ -136,12 +143,14 @@ gst_vpe_set_output_caps (GstVpe * self)
     out_s = gst_caps_get_structure (outcaps, 0);
     if (out_s &&
         gst_structure_get_int (out_s, "width", &self->output_width) &&
-        gst_structure_get_int (out_s, "height", &self->output_height)) {
+        gst_structure_get_int (out_s, "height", &self->output_height) &&
+        gst_structure_get_fourcc (out_s, "format", &self->output_fourcc)) {
       fixed_caps = TRUE;
     }
   }
 
-  self->passthrough = !(self->interlaced || fixed_caps);
+  self->passthrough = !(self->interlaced || fixed_caps ||
+      (self->input_fourcc != GST_MAKE_FOURCC ('N', 'V', '1', '2')));
 
   GST_DEBUG_OBJECT (self, "Passthrough = %s",
       self->passthrough ? "TRUE" : "FALSE");
@@ -157,12 +166,13 @@ gst_vpe_set_output_caps (GstVpe * self)
       self->output_height = self->input_height;
       self->output_width = self->input_width;
     }
+    self->output_fourcc = GST_MAKE_FOURCC ('N', 'V', '1', '2');
   }
 
   gst_caps_unref (outcaps);
 
   outcaps = gst_caps_new_simple ("video/x-raw-yuv",
-      "format", GST_TYPE_FOURCC, GST_MAKE_FOURCC ('N', 'V', '1', '2'), NULL);
+      "format", GST_TYPE_FOURCC, self->output_fourcc, NULL);
 
   out_s = gst_caps_get_structure (outcaps, 0);
 
@@ -200,7 +210,7 @@ gst_vpe_init_output_buffers (GstVpe * self)
 
   for (i = 0; i < self->num_output_buffers; i++) {
     buf = gst_vpe_buffer_new (self->dev,
-        GST_MAKE_FOURCC ('N', 'V', '1', '2'),
+        self->output_fourcc,
         self->output_width, self->output_height,
         i, V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
     if (!buf) {
@@ -215,6 +225,19 @@ gst_vpe_init_output_buffers (GstVpe * self)
   return TRUE;
 }
 
+static int
+gst_vpe_fourcc_to_pixelformat (guint32 fourcc)
+{
+  switch (fourcc) {
+    case GST_MAKE_FOURCC ('Y', 'U', 'Y', '2'):
+    case GST_MAKE_FOURCC ('Y', 'U', 'Y', 'V'):
+      return V4L2_PIX_FMT_YUYV;
+    case GST_MAKE_FOURCC ('N', 'V', '1', '2'):
+      return V4L2_PIX_FMT_NV12;
+  }
+  return -1;
+}
+
 static gboolean
 gst_vpe_output_set_fmt (GstVpe * self)
 {
@@ -225,7 +248,8 @@ gst_vpe_output_set_fmt (GstVpe * self)
   fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
   fmt.fmt.pix_mp.width = self->output_width;
   fmt.fmt.pix_mp.height = self->output_height;
-  fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_NV12;
+  fmt.fmt.pix_mp.pixelformat =
+      gst_vpe_fourcc_to_pixelformat (self->output_fourcc);
   fmt.fmt.pix_mp.field = V4L2_FIELD_ANY;
   GST_DEBUG_OBJECT (self, "vpe: output S_FMT image: %dx%d",
       fmt.fmt.pix_mp.width, fmt.fmt.pix_mp.height);
@@ -255,7 +279,7 @@ gst_vpe_init_input_buffers (GstVpe * self, gint num_input_buffers)
 
   for (i = 0; i < num_input_buffers; i++) {
     buf = gst_vpe_buffer_new (self->dev,
-        GST_MAKE_FOURCC ('N', 'V', '1', '2'),
+        self->input_fourcc,
         self->input_width, self->input_height, i,
         V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
     if (!buf) {
@@ -279,7 +303,8 @@ gst_vpe_input_set_fmt (GstVpe * self)
   bzero (&fmt, sizeof (fmt));
   fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
   fmt.fmt.pix_mp.width = self->input_width;
-  fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_NV12;
+  fmt.fmt.pix_mp.pixelformat =
+      gst_vpe_fourcc_to_pixelformat (self->input_fourcc);
   if (self->interlaced) {
 #ifdef GST_VPE_USE_FIELD_ALTERNATE
     fmt.fmt.pix_mp.height = (self->input_height >> 1);
@@ -821,6 +846,7 @@ gst_vpe_change_state (GstElement * element, GstStateChange transition)
       break;
     case GST_STATE_CHANGE_READY_TO_NULL:
       GST_OBJECT_LOCK (self);
+      self->state = GST_VPE_ST_DEINIT;
       gst_vpe_destroy (self);
       GST_OBJECT_UNLOCK (self);
       break;
