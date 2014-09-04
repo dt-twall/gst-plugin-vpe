@@ -149,14 +149,8 @@ gst_vpe_set_output_caps (GstVpe * self)
     }
   }
 
-  self->passthrough = !(self->interlaced || fixed_caps ||
-      (self->input_fourcc != GST_MAKE_FOURCC ('N', 'V', '1', '2')));
-
-  GST_DEBUG_OBJECT (self, "Passthrough = %s",
-      self->passthrough ? "TRUE" : "FALSE");
-
   if (!fixed_caps) {
-    if (self->input_crop.c.width && !self->passthrough) {
+    if (self->input_crop.c.width && self->interlaced) {
       /* Ducati decoder had the habit of setting height as half frame hight for
        * interlaced streams */
       self->output_height = (self->interlaced) ? self->input_crop.c.height * 2 :
@@ -168,6 +162,14 @@ gst_vpe_set_output_caps (GstVpe * self)
     }
     self->output_fourcc = GST_MAKE_FOURCC ('N', 'V', '1', '2');
   }
+
+  self->passthrough = !(self->interlaced ||
+      self->output_width != self->input_width ||
+      self->output_height != self->input_height ||
+      self->output_fourcc != self->input_fourcc);
+
+  GST_DEBUG_OBJECT (self, "Passthrough = %s",
+      self->passthrough ? "TRUE" : "FALSE");
 
   gst_caps_unref (outcaps);
 
@@ -644,7 +646,9 @@ gst_vpe_bufferalloc (GstPad * pad, guint64 offset, guint size,
     GST_OBJECT_LOCK (self);
     if (G_UNLIKELY (self->state == GST_VPE_ST_DEINIT)) {
       GST_OBJECT_UNLOCK (self);
-      return GST_FLOW_ERROR;
+      GST_WARNING_OBJECT (self,
+          "Plugin is shutting down, returning GST_FLOW_WRONG_STATE");
+      return GST_FLOW_WRONG_STATE;
     }
     if (G_UNLIKELY (NULL == self->input_pool)) {
       if (!gst_vpe_init_input_bufs (self, caps)) {
@@ -680,7 +684,10 @@ gst_vpe_chain (GstPad * pad, GstBuffer * buf)
   if (G_UNLIKELY (self->state != GST_VPE_ST_ACTIVE)) {
     if (self->state == GST_VPE_ST_DEINIT) {
       GST_OBJECT_UNLOCK (self);
-      return GST_FLOW_ERROR;
+      GST_WARNING_OBJECT (self,
+          "Plugin is shutting down, freeing buffer: %p", buf);
+      gst_buffer_unref (buf);
+      return GST_FLOW_OK;
     } else {
       if (gst_vpe_start (self, GST_BUFFER_CAPS (buf))) {
         if (self->passthrough && self->input_crop.c.width != 0) {
@@ -743,6 +750,9 @@ gst_vpe_event (GstPad * pad, GstEvent * event)
           &start, &stop, &time);
       gst_segment_set_newsegment_full (&self->segment, update,
           rate, arate, fmt, start, stop, time);
+      GST_DEBUG_OBJECT (self, "newsegment: start %" GST_TIME_FORMAT ", stop: %"
+          GST_TIME_FORMAT ", rate: %2.2f", GST_TIME_ARGS (start),
+          GST_TIME_ARGS (stop), rate);
     }
       break;
     case GST_EVENT_CROP:
