@@ -27,7 +27,7 @@
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_YUV ("NV12")));
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("NV12")));
 
 /* HACK!!: The following sink caps are copied from gst-plugins-ducati source
  * If something changes there, the same should be changed here as well !!
@@ -85,7 +85,7 @@ static GstStaticPadTemplate ducativc1dec_sink_factory = GST_STATIC_PAD_TEMPLATE 
     GST_PAD_ALWAYS,
     GST_STATIC_CAPS ("video/x-wmv, "
         "wmvversion = (int) 3, "
-        "format = (fourcc){ WVC1, WMV3 }, "
+        "format = (string){ WVC1, WMV3 }, "
         "width = (int)[ 16, 2048 ], "
         "height = (int)[ 16, 2048 ], " "framerate = (fraction)[ 0, max ];")
     );
@@ -122,7 +122,7 @@ gst_vpe_ ## decoder_name ## _class_init (gpointer g_class)       \
 static void gst_vpe_ ## decoder_name ## _base_init (gpointer gclass)         \
 {                                   \
   GstElementClass *element_class = GST_ELEMENT_CLASS (gclass);               \
-  gst_element_class_set_details_simple (element_class,                       \
+  gst_element_class_set_static_metadata (element_class,                       \
       #decoder_name "vpe",                                                   \
       "Codec/Decoder/Video",                                                 \
       #decoder_name " + vpe bin", "Harinarayan Bhatta <harinarayan@ti.com>");\
@@ -178,7 +178,7 @@ gst_vpe_ ## decoder_name ## _get_type (void)                   \
   static volatile gsize gonce_data = 0;                        \
   if (g_once_init_enter (&gonce_data)) {                       \
   GType _type;                                                 \
-  _type = gst_type_register_static_full (GST_TYPE_BIN,         \
+  _type = g_type_register_static_simple (GST_TYPE_BIN,                \
   g_intern_static_string (#type),                              \
   sizeof (type ## Class),                                      \
   gst_vpe_ ## decoder_name ## _base_init,                      \

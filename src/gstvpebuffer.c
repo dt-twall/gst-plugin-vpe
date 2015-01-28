@@ -26,123 +26,193 @@
 #include <unistd.h>
 #include <gst/dmabuf/dmabuf.h>
 
-static GstBufferClass *parent_class;
 
-static void gst_vpe_buffer_finalize (GObject * obj);
+static GType gst_meta_vpe_buffer_api_get_type (void);
+#define GST_META_VPE_BUFFER_API_TYPE (gst_meta_vpe_buffer_api_get_type())
 
-G_DEFINE_TYPE (GstVpeBuffer, gst_vpe_buffer, GST_TYPE_BUFFER);
+static const GstMetaInfo *gst_meta_vpe_buffer_get_info (void);
+#define GST_META_VPE_BUFFER_INFO (gst_meta_vpe_buffer_get_info())
+
+#define GST_META_VPE_BUFFER_GET(buf) ((GstMetaVpeBuffer *)gst_buffer_get_meta(buf,GST_META_VPE_BUFFER_API_TYPE))
+#define GST_META_VPE_BUFFER_ADD(buf) ((GstMetaVpeBuffer *)gst_buffer_add_meta(buf,GST_META_VPE_BUFFER_INFO,NULL))
 
 
-static void
-gst_vpe_buffer_init (GstVpeBuffer * self)
+static gboolean
+vpebuffer_init_func (GstMeta * meta, gpointer params, GstBuffer * buffer)
 {
+  GST_DEBUG ("init called on buffer %p, meta %p", buffer, meta);
+  /* nothing to init really, the init function is mostly for allocating
+   * additional memory or doing special setup as part of adding the metadata to
+   * the buffer*/
+  return TRUE;
 }
 
 static void
-gst_vpe_buffer_class_init (GstVpeBufferClass * klass)
+vpebuffer_free_func (GstMeta * vpemeta, GstBuffer * buffer)
 {
-  parent_class = g_type_class_peek_parent (klass);
+  GstMetaVpeBuffer *meta = (GstMetaVpeBuffer *) vpemeta;
 
-  /* Override the mini-object's finalize routine so we can do cleanup when
-   * a GstVpeBufferClass is unref'd.
-   */
-  klass->parent_class.mini_object_class.finalize =
-      (GstMiniObjectFinalizeFunction) gst_vpe_buffer_finalize;
-}
-
-static void
-gst_vpe_buffer_finalize (GObject * obj)
-{
-  GstVpeBuffer *buf = GST_VPE_BUFFER (obj);
-
-  if (buf->pool) {
-    /* Put the buffer back into the pool */
-    if (gst_vpe_buffer_pool_put (buf->pool, buf)) {
-      VPE_DEBUG ("Recycled VPE buffer, index: %d, type: %d fd: %d",
-          buf->v4l2_buf.index, buf->v4l2_buf.type, buf->v4l2_planes[0].m.fd);
-      return;
-    }
-  }
   VPE_DEBUG ("Free VPE buffer, index: %d, type: %d fd: %d",
-      buf->v4l2_buf.index, buf->v4l2_buf.type, buf->v4l2_planes[0].m.fd);
+      meta->v4l2_buf.index, meta->v4l2_buf.type, meta->v4l2_planes[0].m.fd);
 
   /* No pool to put back to buffer into, so delete it completely */
-  if (buf->bo) {
+  if (meta->bo) {
     /* Close the dmabuff fd */
-    close (buf->v4l2_planes[0].m.fd);
+    close (meta->v4l2_planes[0].m.fd);
 
     /* Free the DRM buffer */
-    omap_bo_del (buf->bo);
+    omap_bo_del (meta->bo);
   }
-  GST_BUFFER_CLASS (parent_class)->
-      mini_object_class.finalize (GST_MINI_OBJECT (buf));
 }
 
-GstVpeBuffer *
-gst_vpe_buffer_new (struct omap_device *dev,
+static gboolean
+vpebuffer_transform_func (GstBuffer * transbuf, GstMeta * meta,
+    GstBuffer * buffer, GQuark type, gpointer data)
+{
+  return FALSE;
+}
+
+static GType
+gst_meta_vpe_buffer_api_get_type (void)
+{
+  static volatile GType type;
+  static const gchar *tags[] = { "vpebuffer", NULL };
+
+  if (g_once_init_enter (&type)) {
+    GType _type = gst_meta_api_type_register ("GstMetaVpeBufferAPI", tags);
+    g_once_init_leave (&type, _type);
+  }
+  return type;
+}
+
+static const GstMetaInfo *
+gst_meta_vpe_buffer_get_info (void)
+{
+  static const GstMetaInfo *meta_vpe_buffer_info = NULL;
+
+  if (g_once_init_enter (&meta_vpe_buffer_info)) {
+    const GstMetaInfo *mi = gst_meta_register (GST_META_VPE_BUFFER_API_TYPE,
+        "GstMetaVpeBuffer",
+        sizeof (GstMetaVpeBuffer),
+        vpebuffer_init_func, vpebuffer_free_func, vpebuffer_transform_func);
+    g_once_init_leave (&meta_vpe_buffer_info, mi);
+  }
+  return meta_vpe_buffer_info;
+}
+
+GstMetaVpeBuffer *
+gst_buffer_add_vpe_buffer_meta (GstBuffer * buf, struct omap_device * dev,
     guint32 fourcc, gint width, gint height, int index, guint32 v4l2_type)
 {
-  GstVpeBuffer *buf;
-  GstDmaBuf *dmabuf;
-  int size;
+  GstMetaVpeBuffer *vpebuf;
 
-  buf = (GstVpeBuffer *) gst_mini_object_new (GST_TYPE_VPE_BUFFER);
+  vpebuf = GST_META_VPE_BUFFER_ADD (buf);
+  if (!vpebuf)
+    goto fail;
 
-  g_return_val_if_fail (buf != NULL, NULL);
+  vpebuf->size = 0;
+  vpebuf->pool = NULL;
+  vpebuf->bo = NULL;
+  memset (&vpebuf->v4l2_buf, 0, sizeof (vpebuf->v4l2_buf));
+  memset (&vpebuf->v4l2_planes, 0, sizeof (vpebuf->v4l2_planes));
 
-  buf->pool = NULL;
-  buf->bo = NULL;
-  memset (&buf->v4l2_buf, 0, sizeof (buf->v4l2_buf));
-  memset (&buf->v4l2_planes, 0, sizeof (buf->v4l2_planes));
-
-  buf->v4l2_buf.type = v4l2_type;
-  buf->v4l2_buf.index = index;
-  buf->v4l2_buf.m.planes = buf->v4l2_planes;
-  buf->v4l2_buf.memory = V4L2_MEMORY_DMABUF;
+  vpebuf->v4l2_buf.type = v4l2_type;
+  vpebuf->v4l2_buf.index = index;
+  vpebuf->v4l2_buf.m.planes = vpebuf->v4l2_planes;
+  vpebuf->v4l2_buf.memory = V4L2_MEMORY_DMABUF;
 
   switch (fourcc) {
     case GST_MAKE_FOURCC ('A', 'R', '2', '4'):
-      size = width * height * 4;
-      buf->bo = omap_bo_new (dev, size, OMAP_BO_WC);
-      buf->v4l2_buf.length = 1;
-      buf->v4l2_buf.m.planes[0].m.fd = omap_bo_dmabuf (buf->bo);
+      vpebuf->size = width * height * 4;
+      vpebuf->bo = omap_bo_new (dev, vpebuf->size, OMAP_BO_WC);
+      vpebuf->v4l2_buf.length = 1;
+      vpebuf->v4l2_buf.m.planes[0].m.fd = omap_bo_dmabuf (vpebuf->bo);
       break;
     case GST_MAKE_FOURCC ('Y', 'U', 'Y', '2'):
     case GST_MAKE_FOURCC ('Y', 'U', 'Y', 'V'):
-      size = width * height * 2;
-      buf->bo = omap_bo_new (dev, size, OMAP_BO_WC);
-      buf->v4l2_buf.length = 1;
-      buf->v4l2_buf.m.planes[0].m.fd = omap_bo_dmabuf (buf->bo);
+      vpebuf->size = width * height * 2;
+      vpebuf->bo = omap_bo_new (dev, vpebuf->size, OMAP_BO_WC);
+      vpebuf->v4l2_buf.length = 1;
+      vpebuf->v4l2_buf.m.planes[0].m.fd = omap_bo_dmabuf (vpebuf->bo);
       break;
     case GST_MAKE_FOURCC ('N', 'V', '1', '2'):
-      size = (width * height * 3) / 2;
-      buf->bo = omap_bo_new (dev, size, OMAP_BO_WC);
-      buf->v4l2_buf.length = 2;
-      buf->v4l2_buf.m.planes[1].m.fd =
-          buf->v4l2_buf.m.planes[0].m.fd = omap_bo_dmabuf (buf->bo);
-      buf->v4l2_buf.m.planes[1].data_offset = width * height;
+      vpebuf->size = (width * height * 3) / 2;
+      vpebuf->bo = omap_bo_new (dev, vpebuf->size, OMAP_BO_WC);
+      vpebuf->v4l2_buf.length = 2;
+      vpebuf->v4l2_buf.m.planes[1].m.fd =
+          vpebuf->v4l2_buf.m.planes[0].m.fd = omap_bo_dmabuf (vpebuf->bo);
+      vpebuf->v4l2_buf.m.planes[1].data_offset = width * height;
       break;
     default:
       VPE_ERROR ("invalid format: 0x%08x", fourcc);
       goto fail;
   }
+  return vpebuf;
+fail:
+  gst_buffer_unref (buf);
+  return NULL;
+}
 
-  GST_BUFFER_DATA (GST_BUFFER (buf)) = omap_bo_map (buf->bo);
-  GST_BUFFER_SIZE (GST_BUFFER (buf)) = size;
+GstMetaVpeBuffer *
+gst_buffer_get_vpe_buffer_meta (GstBuffer * buf)
+{
+  GstMetaVpeBuffer *vpebuf;
+  vpebuf = GST_META_VPE_BUFFER_GET (buf);
+  return vpebuf;
+}
+
+
+GstBuffer *
+gst_vpe_buffer_new (struct omap_device * dev,
+    guint32 fourcc, gint width, gint height, int index, guint32 v4l2_type)
+{
+  GstMetaVpeBuffer *vpemeta;
+  GstMetaDmaBuf *dmabuf;
+  GstVideoCropMeta *crop;
+  int size;
+  GstBuffer *buf;
+
+  buf = gst_buffer_new ();
+  if (!buf)
+    return NULL;
+
+  vpemeta = gst_buffer_add_vpe_buffer_meta (buf, dev,
+      fourcc, width, height, index, v4l2_type);
+  if (!vpemeta) {
+    VPE_ERROR ("Failed to add vpe metadata");
+    gst_buffer_unref (buf);
+    return NULL;
+  }
+
+  gst_buffer_append_memory (buf,
+      gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
+          omap_bo_map (vpemeta->bo), vpemeta->size, 0, vpemeta->size, NULL,
+          NULL));
 
   /* attach dmabuf handle to buffer so that elements from other
    * plugins can access for zero copy hw accel:
    */
-  // XXX buffer doesn't take ownership of the GstDmaBuf...
-  dmabuf = gst_dma_buf_new (omap_bo_dmabuf (buf->bo));
-  gst_buffer_set_dma_buf (GST_BUFFER (buf), dmabuf);
-  gst_dma_buf_unref (dmabuf);
+  dmabuf =
+      gst_buffer_add_dma_buf_meta (GST_BUFFER (buf),
+      omap_bo_dmabuf (vpemeta->bo));
+  if (!dmabuf) {
+    VPE_DEBUG ("Failed to attach dmabuf to buffer");
+    gst_buffer_unref (buf);
+    return NULL;
+  }
 
-  VPE_DEBUG ("Allocated a new VPE buffer, index: %d, type: %d",
-      index, v4l2_type);
+  crop = gst_buffer_add_video_crop_meta (buf);
+  if (!crop) {
+    VPE_DEBUG ("Failed to add crop meta to buffer");
+  } else {
+    crop->x = 0;
+    crop->y = 0;
+    crop->height = height;
+    crop->width = width;
+  }
+
+  VPE_DEBUG ("Allocated a new VPE buffer, %dx%d, index: %d, type: %d",
+      width, height, index, v4l2_type);
 
   return buf;
-fail:
-  gst_buffer_unref (GST_BUFFER (buf));
-  return NULL;
 }

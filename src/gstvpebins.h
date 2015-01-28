@@ -29,7 +29,7 @@
 #include <omap_drm.h>
 #include <omap_drmif.h>
 #include <gst/video/video.h>
-#include <gst/video/video-crop.h>
+#include <gst/video/gstvideometa.h>
 
 #include <linux/videodev2.h>
 #include <linux/v4l2-controls.h>

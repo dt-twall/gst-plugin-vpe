@@ -40,19 +40,51 @@
 #endif
 
 
-GST_BOILERPLATE (GstVpe, gst_vpe, GstElement, GST_TYPE_ELEMENT);
+static void gst_vpe_class_init (GstVpeClass * klass);
+static void gst_vpe_init (GstVpe * self, gpointer klass);
+static void gst_vpe_base_init (gpointer gclass);
+static GstElementClass *parent_class = NULL;
+
+static gboolean gst_vpe_set_output_caps (GstVpe * self);
+
+GType
+gst_vpe_get_type (void)
+{
+  static GType vpe_type = 0;
+
+  if (!vpe_type) {
+    static const GTypeInfo vpe_info = {
+      sizeof (GstVpeClass),
+      (GBaseInitFunc) gst_vpe_base_init,
+      NULL,
+      (GClassInitFunc) gst_vpe_class_init,
+      NULL,
+      NULL,
+      sizeof (GstVpe),
+      0,
+      (GInstanceInitFunc) gst_vpe_init,
+    };
+
+    vpe_type = g_type_register_static (GST_TYPE_ELEMENT,
+        "GstVpe", &vpe_info, 0);
+  }
+  return vpe_type;
+}
+
 
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_YUV ("NV12") ";"
-        GST_VIDEO_CAPS_YUV ("YUYV") ";" GST_VIDEO_CAPS_YUV ("YUY2")));
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("NV12")
+        ";" GST_VIDEO_CAPS_MAKE ("YUYV")
+        ";" GST_VIDEO_CAPS_MAKE ("YUY2")));
 
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_YUV ("NV12") ";"
-        GST_VIDEO_CAPS_YUV ("YUYV") ";" GST_VIDEO_CAPS_YUV ("YUY2")));
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("NV12")
+        ";" GST_VIDEO_CAPS_MAKE ("YUYV")
+        ";" GST_VIDEO_CAPS_MAKE ("YUY2")));
 
 enum
 {
@@ -73,7 +105,10 @@ gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
   gboolean match;
   GstStructure *s;
   gint w, h;
-  guint32 fourcc;
+  guint32 fourcc = 0;
+  const gchar *fmt = NULL;
+
+  GST_DEBUG_OBJECT (self, "Input caps: %s", gst_caps_to_string (input_caps));
 
   if (self->input_caps) {
     match = gst_caps_is_strictly_equal (self->input_caps, input_caps);
@@ -86,10 +121,11 @@ gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
 
   s = gst_caps_get_structure (input_caps, 0);
 
-  if (!gst_structure_get_fourcc (s, "format", &fourcc)) {
+  fmt = gst_structure_get_string (s, "format");
+  if (!fmt) {
     return FALSE;
   }
-
+  fourcc = GST_STR_FOURCC (fmt);
   /* For interlaced streams, ducati decoder sets caps without the interlaced 
    * at first, and then changes it to set it as true or false, so if interlaced
    * is false, we cannot assume that the stream is pass-through
@@ -125,36 +161,42 @@ gst_vpe_set_output_caps (GstVpe * self)
 {
   GstCaps *outcaps;
   GstStructure *s, *out_s;
-  gboolean fixed_caps;
   gint fps_n, fps_d;
   gint par_width, par_height;
+  const gchar *fmt = NULL;
 
   if (!self->input_caps)
     return FALSE;
 
+  if (self->fixed_caps)
+    return TRUE;
+
   s = gst_caps_get_structure (self->input_caps, 0);
 
-  fixed_caps = FALSE;
-
   outcaps = gst_pad_get_allowed_caps (self->srcpad);
-  if (outcaps) {
+  if (outcaps && !(self->output_caps
+          && gst_caps_is_strictly_equal (outcaps, self->output_caps))) {
     GST_DEBUG_OBJECT (self, "Downstream allowed caps: %s",
         gst_caps_to_string (outcaps));
     out_s = gst_caps_get_structure (outcaps, 0);
+    fmt = gst_structure_get_string (out_s, "format");
+
     if (out_s &&
         gst_structure_get_int (out_s, "width", &self->output_width) &&
-        gst_structure_get_int (out_s, "height", &self->output_height) &&
-        gst_structure_get_fourcc (out_s, "format", &self->output_fourcc)) {
-      fixed_caps = TRUE;
+        gst_structure_get_int (out_s, "height", &self->output_height) && fmt) {
+      self->output_fourcc = GST_STR_FOURCC (fmt);
+      GST_DEBUG_OBJECT (self, "Using downstream caps, fixed_caps = TRUE");
+      self->fixed_caps = TRUE;
     }
   }
 
-  if (!fixed_caps) {
+  if (!self->fixed_caps) {
     if (self->input_crop.c.width && self->interlaced) {
       /* Ducati decoder had the habit of setting height as half frame hight for
        * interlaced streams */
-      self->output_height = (self->interlaced) ? self->input_crop.c.height * 2 :
-          self->input_crop.c.height;
+      self->output_height =
+          (self->interlaced) ? self->input_crop.c.height *
+          2 : self->input_crop.c.height;
       self->output_width = self->input_crop.c.width;
     } else {
       self->output_height = self->input_height;
@@ -173,8 +215,10 @@ gst_vpe_set_output_caps (GstVpe * self)
 
   gst_caps_unref (outcaps);
 
-  outcaps = gst_caps_new_simple ("video/x-raw-yuv",
-      "format", GST_TYPE_FOURCC, self->output_fourcc, NULL);
+  outcaps = gst_caps_new_simple ("video/x-raw",
+      "format", G_TYPE_STRING,
+      gst_video_format_to_string
+      (gst_video_format_from_fourcc (self->output_fourcc)), NULL);
 
   out_s = gst_caps_get_structure (outcaps, 0);
 
@@ -202,10 +246,15 @@ static gboolean
 gst_vpe_init_output_buffers (GstVpe * self)
 {
   int i;
-  GstVpeBuffer *buf;
+  GstBuffer *buf;
+  if (!self->output_caps) {
+    GST_DEBUG_OBJECT (self,
+        "Output caps should be set before init output buffer");
+    return FALSE;
+  }
   self->output_pool =
       gst_vpe_buffer_pool_new (TRUE, self->num_output_buffers,
-      V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
+      V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, self->output_caps);
   if (!self->output_pool) {
     return FALSE;
   }
@@ -218,11 +267,11 @@ gst_vpe_init_output_buffers (GstVpe * self)
     if (!buf) {
       return FALSE;
     }
-    gst_buffer_set_caps (GST_BUFFER (buf), self->output_caps);
+
     gst_vpe_buffer_pool_put (self->output_pool, buf);
     /* gst_vpe_buffer_pool_put keeps a reference of the buffer,
-     * so, unref ours */
-    gst_buffer_unref (GST_BUFFER (buf));
+     * so, unref ours 
+     gst_buffer_unref (GST_BUFFER (buf)); */
   }
   return TRUE;
 }
@@ -271,10 +320,15 @@ static gboolean
 gst_vpe_init_input_buffers (GstVpe * self, gint num_input_buffers)
 {
   int i;
-  GstVpeBuffer *buf;
+  GstBuffer *buf;
+  if (!self->input_caps) {
+    GST_DEBUG_OBJECT (self,
+        "Input caps should be set before init input buffer");
+    return FALSE;
+  }
   self->input_pool =
       gst_vpe_buffer_pool_new (FALSE, num_input_buffers,
-      V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
+      V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, self->input_caps);
   if (!self->input_pool) {
     return FALSE;
   }
@@ -290,8 +344,6 @@ gst_vpe_init_input_buffers (GstVpe * self, gint num_input_buffers)
 
     if (!gst_vpe_buffer_pool_put (self->input_pool, buf))
       return FALSE;
-    /* gst_vpe_buffer_pool_put function keeps a reference, so give up ours */
-    gst_buffer_unref (GST_BUFFER (buf));
   }
   return TRUE;
 }
@@ -322,8 +374,8 @@ gst_vpe_input_set_fmt (GstVpe * self)
 
   GST_DEBUG_OBJECT (self,
       "input S_FMT field: %d, image: %dx%d, numbufs: %d",
-      fmt.fmt.pix_mp.field, fmt.fmt.pix_mp.width, fmt.fmt.pix_mp.height,
-      self->num_input_buffers);
+      fmt.fmt.pix_mp.field, fmt.fmt.pix_mp.width,
+      fmt.fmt.pix_mp.height, self->num_input_buffers);
   ret = ioctl (self->video_fd, VIDIOC_S_FMT, &fmt);
   if (ret < 0) {
     GST_ERROR_OBJECT (self, "VIDIOC_S_FMT failed");
@@ -335,6 +387,11 @@ gst_vpe_input_set_fmt (GstVpe * self)
   }
 
   if (self->input_crop.c.width != 0) {
+    GST_DEBUG_OBJECT (self,
+        "Crop values: top: %d, left: %d, width: %d, height: %d",
+        self->input_crop.c.top, self->input_crop.c.left,
+        self->input_crop.c.width, self->input_crop.c.height);
+
     ret = ioctl (self->video_fd, VIDIOC_S_CROP, &self->input_crop);
     if (ret < 0) {
       GST_ERROR_OBJECT (self, "VIDIOC_S_CROP failed");
@@ -344,31 +401,20 @@ gst_vpe_input_set_fmt (GstVpe * self)
   return TRUE;
 }
 
-static void
-gst_vpe_try_dequeue (GstVpeBufferPool * pool)
-{
-  GstVpeBuffer *buf;
-  while (1) {
-    buf = gst_vpe_buffer_pool_dequeue (pool);
-    if (buf) {
-      gst_buffer_unref (GST_BUFFER (buf));
-    } else
-      break;
-  }
-}
 
 static void
 gst_vpe_output_loop (gpointer data)
 {
   GstVpe *self = (GstVpe *) data;
-  GstVpeBuffer *buf = NULL;
+  GstBuffer *buf = NULL;
   GST_OBJECT_LOCK (self);
   if (self->output_pool)
-    buf = gst_vpe_buffer_pool_dequeue (self->output_pool);
+    (void) gst_buffer_pool_acquire_buffer (GST_BUFFER_POOL (self->output_pool),
+        &buf, NULL);
   GST_OBJECT_UNLOCK (self);
   if (buf) {
-    GST_DEBUG_OBJECT (self, "push: %" GST_TIME_FORMAT " (%d bytes, ptr %p)",
-        GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (buf)), GST_BUFFER_SIZE (buf), buf);
+    GST_DEBUG_OBJECT (self, "push: %" GST_TIME_FORMAT " (ptr %p)",
+        GST_TIME_ARGS (GST_BUFFER_PTS (buf)), buf);
     gst_pad_push (self->srcpad, GST_BUFFER (buf));
   } else
     usleep (10000);
@@ -466,22 +512,22 @@ gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
       gst_vpe_input_set_fmt (self);
       gst_vpe_output_set_fmt (self);
       if (self->input_pool)
-        gst_vpe_buffer_pool_set_streaming (self->input_pool, self->video_fd,
-            streaming, self->interlaced);
+        gst_vpe_buffer_pool_set_streaming (self->input_pool,
+            self->video_fd, streaming, self->interlaced);
       if (self->output_pool)
-        gst_vpe_buffer_pool_set_streaming (self->output_pool, self->video_fd,
-            streaming, FALSE);
+        gst_vpe_buffer_pool_set_streaming (self->output_pool,
+            self->video_fd, streaming, FALSE);
     } else {
       GST_DEBUG_OBJECT (self, "streaming already on");
     }
   } else {
     if (self->video_fd >= 0) {
       if (self->input_pool)
-        gst_vpe_buffer_pool_set_streaming (self->input_pool, self->video_fd,
-            streaming, self->interlaced);
+        gst_vpe_buffer_pool_set_streaming (self->input_pool,
+            self->video_fd, streaming, self->interlaced);
       if (self->output_pool)
-        gst_vpe_buffer_pool_set_streaming (self->output_pool, self->video_fd,
-            streaming, FALSE);
+        gst_vpe_buffer_pool_set_streaming (self->output_pool,
+            self->video_fd, streaming, FALSE);
       close (self->video_fd);
       self->video_fd = -1;
     } else {
@@ -530,6 +576,7 @@ gst_vpe_destroy (GstVpe * self)
   if (self->output_caps)
     gst_caps_unref (self->output_caps);
   self->output_caps = NULL;
+  self->fixed_caps = FALSE;
   if (self->input_pool) {
     gst_vpe_buffer_pool_destroy (self->input_pool);
     GST_DEBUG_OBJECT (self, "gst_vpe_buffer_pool_destroy(input) done");
@@ -559,20 +606,25 @@ gst_vpe_destroy (GstVpe * self)
 }
 
 static gboolean
-gst_vpe_activate_push (GstPad * pad, gboolean active)
+gst_vpe_activate_mode (GstPad * pad, GstObject * parent,
+    GstPadMode mode, gboolean active)
 {
-  gboolean result = TRUE;
-  GstVpe *self;
-  self = GST_VPE (GST_OBJECT_PARENT (pad));
-  GST_DEBUG_OBJECT (self, "gst_vpe_activate_push (active = %d)", active);
-  if (!active) {
-    result = gst_pad_stop_task (self->srcpad);
-    GST_DEBUG_OBJECT (self, "task gst_vpe_output_loop stopped");
-  } else {
-    result = gst_pad_start_task (self->srcpad, gst_vpe_output_loop, self);
-    GST_DEBUG_OBJECT (self, "gst_pad_start_task returned %d", result);
+  if (mode == GST_PAD_MODE_PUSH) {
+    gboolean result = TRUE;
+    GstVpe *self;
+    self = GST_VPE (parent);
+    GST_DEBUG_OBJECT (self, "gst_vpe_activate_mode (active = %d)", active);
+    if (!active) {
+      result = gst_pad_stop_task (self->srcpad);
+      GST_DEBUG_OBJECT (self, "task gst_vpe_output_loop stopped");
+    } else {
+      result =
+          gst_pad_start_task (self->srcpad, gst_vpe_output_loop, self, NULL);
+      GST_DEBUG_OBJECT (self, "gst_pad_start_task returned %d", result);
+    }
+    return result;
   }
-  return result;
+  return FALSE;
 }
 
 static gboolean
@@ -583,102 +635,91 @@ gst_vpe_sink_setcaps (GstPad * pad, GstCaps * caps)
   GstVpe *self = GST_VPE (gst_pad_get_parent (pad));
   if (caps) {
     GST_OBJECT_LOCK (self);
-    ret = gst_vpe_parse_input_caps (self, caps);
+    if (TRUE == (ret = gst_vpe_parse_input_caps (self, caps))) {
+      ret = gst_vpe_set_output_caps (self);
+    }
     GST_OBJECT_UNLOCK (self);
+
+    if (TRUE == ret) {
+      gst_pad_set_caps (self->srcpad, self->output_caps);
+    }
+
     GST_INFO_OBJECT (self, "set caps done %d", ret);
   }
   gst_object_unref (self);
   return ret;
 }
 
-
 static GstCaps *
-gst_vpe_src_getcaps (GstPad * pad)
+gst_vpe_getcaps (GstPad * pad)
 {
   GstCaps *caps = NULL;
-  caps = GST_PAD_CAPS (pad);
+  caps = gst_pad_get_current_caps (pad);
   if (caps == NULL) {
-    return gst_caps_copy (gst_pad_get_pad_template_caps (pad));
+    GstCaps *fil = gst_pad_get_pad_template_caps (pad);
+    return gst_caps_copy (fil);
   } else {
     return gst_caps_copy (caps);
   }
 }
 
 static gboolean
-gst_vpe_query (GstVpe * self, GstPad * pad,
-    GstQuery * query, gboolean * forward)
+gst_vpe_query (GstPad * pad, GstObject * parent, GstQuery * query)
 {
-  gboolean res = TRUE;
-  *forward = TRUE;
+  GstVpe *self = GST_VPE (parent);
+
   switch (GST_QUERY_TYPE (query)) {
-    case GST_QUERY_BUFFERS:
-      /* TODO: */
+    case GST_QUERY_CAPS:
+    {
+      GstCaps *caps;
+      caps = gst_vpe_getcaps (pad);
+      gst_query_set_caps_result (query, caps);
+      return TRUE;
       break;
+    }
+    case GST_QUERY_ALLOCATION:
+    {
+      GstCaps *caps;
+      gst_query_parse_allocation (query, &caps, NULL);
+
+      if (caps == NULL)
+        return FALSE;
+
+      GST_OBJECT_LOCK (self);
+      if (G_UNLIKELY (self->state == GST_VPE_ST_DEINIT)) {
+        GST_OBJECT_UNLOCK (self);
+        GST_WARNING_OBJECT (self, "Plugin is shutting down, returning FALSE");
+        return FALSE;
+      }
+      if (G_UNLIKELY (NULL == self->input_pool)) {
+        if (!gst_vpe_init_input_bufs (self, caps)) {
+          GST_OBJECT_UNLOCK (self);
+          return FALSE;
+        }
+      }
+      gst_query_add_allocation_pool (query,
+          GST_BUFFER_POOL (self->input_pool), 1, 0, self->num_input_buffers);
+      GST_OBJECT_UNLOCK (self);
+      return TRUE;
+      break;
+    }
     case GST_QUERY_LATENCY:
       /* TODO: */
       break;
     default:
       break;
   }
-  return res;
-}
-
-static gboolean
-gst_vpe_src_query (GstPad * pad, GstQuery * query)
-{
-  gboolean res = TRUE, forward = TRUE;
-  GstVpe *self = GST_VPE (GST_OBJECT_PARENT (pad));
-  GstVpeClass *klass = GST_VPE_GET_CLASS (self);
-  GST_DEBUG_OBJECT (self, "query: %" GST_PTR_FORMAT, query);
-  res = gst_vpe_query (self, pad, query, &forward);
-  if (res && forward)
-    res = gst_pad_query_default (pad, query);
-  return res;
+  return gst_pad_query_default (pad, parent, query);
 }
 
 static GstFlowReturn
-gst_vpe_bufferalloc (GstPad * pad, guint64 offset, guint size,
-    GstCaps * caps, GstBuffer ** buf)
+gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 {
-  GstVpe *self;
-  self = GST_VPE (GST_OBJECT_PARENT (pad));
-  do {
-    GST_OBJECT_LOCK (self);
-    if (G_UNLIKELY (self->state == GST_VPE_ST_DEINIT)) {
-      GST_OBJECT_UNLOCK (self);
-      GST_WARNING_OBJECT (self,
-          "Plugin is shutting down, returning GST_FLOW_WRONG_STATE");
-      return GST_FLOW_WRONG_STATE;
-    }
-    if (G_UNLIKELY (NULL == self->input_pool)) {
-      if (!gst_vpe_init_input_bufs (self, caps)) {
-        GST_OBJECT_UNLOCK (self);
-        return GST_FLOW_ERROR;
-      }
-    }
+  GstVpe *self = GST_VPE (parent);
+  GstMetaVpeBuffer *vpe_buf = gst_buffer_get_vpe_buffer_meta (buf);
 
-    /* Try dequeueing some buffers */
-    gst_vpe_try_dequeue (self->input_pool);
-    *buf = GST_BUFFER (gst_vpe_buffer_pool_get (self->input_pool));
-    if (*buf) {
-      GST_OBJECT_UNLOCK (self);
-      gst_buffer_set_caps (*buf, caps);
-      return GST_FLOW_OK;
-    }
-    GST_OBJECT_UNLOCK (self);
-    usleep (10000);
-  } while (1);
-}
-
-
-static GstFlowReturn
-gst_vpe_chain (GstPad * pad, GstBuffer * buf)
-{
-  GstVpe *self = GST_VPE (GST_OBJECT_PARENT (pad));
-  GstEvent *e = NULL;
-
-  GST_DEBUG_OBJECT (self, "chain: %" GST_TIME_FORMAT " (%d bytes, ptr %p)",
-      GST_TIME_ARGS (GST_BUFFER_TIMESTAMP (buf)), GST_BUFFER_SIZE (buf), buf);
+  GST_DEBUG_OBJECT (self, "chain: %" GST_TIME_FORMAT " ( ptr %p)",
+      GST_TIME_ARGS (GST_BUFFER_PTS (buf)), buf);
 
   GST_OBJECT_LOCK (self);
   if (G_UNLIKELY (self->state != GST_VPE_ST_ACTIVE)) {
@@ -689,20 +730,19 @@ gst_vpe_chain (GstPad * pad, GstBuffer * buf)
       gst_buffer_unref (buf);
       return GST_FLOW_OK;
     } else {
-      if (gst_vpe_start (self, GST_BUFFER_CAPS (buf))) {
-        if (self->passthrough && self->input_crop.c.width != 0) {
-          /* If passthrough, use original crop event to send downstream */
-          e = gst_event_new_crop (self->input_crop.c.top,
-              self->input_crop.c.left, self->input_crop.c.width,
-              self->input_crop.c.height);
-        } else {
-          e = gst_event_new_crop (0, 0, self->output_width,
-              self->output_height);
+      if (self->input_crop.c.width == 0) {
+        GstVideoCropMeta *crop = gst_buffer_get_video_crop_meta (buf);
+        if (crop) {
+          self->input_crop.c.left = crop->y;
+          self->input_crop.c.top = crop->x;
+          self->input_crop.c.width = crop->width;
+          self->input_crop.c.height = crop->height;
         }
+      }
+      if (gst_vpe_start (self, gst_pad_get_current_caps (pad))) {
         GST_OBJECT_UNLOCK (self);
         /* Set output caps, this should be done outside the lock */
         gst_pad_set_caps (self->srcpad, self->output_caps);
-        gst_pad_push_event (self->srcpad, e);
         GST_OBJECT_LOCK (self);
       } else {
         GST_OBJECT_UNLOCK (self);
@@ -716,10 +756,9 @@ gst_vpe_chain (GstPad * pad, GstBuffer * buf)
     GST_DEBUG_OBJECT (self, "Passthrough for VPE");
     return gst_pad_push (self->srcpad, buf);
   }
-  if (GST_IS_VPE_BUFFER (buf)) {
-    GstVpeBuffer *vpe_buf = GST_VPE_BUFFER (buf);
+  if (vpe_buf) {
     /* Push the buffer into the V4L2 driver */
-    if (!gst_vpe_buffer_pool_queue (self->input_pool, vpe_buf)) {
+    if (!gst_vpe_buffer_pool_queue (self->input_pool, buf)) {
       GST_OBJECT_UNLOCK (self);
       return GST_FLOW_ERROR;
     }
@@ -733,49 +772,25 @@ gst_vpe_chain (GstPad * pad, GstBuffer * buf)
 }
 
 static gboolean
-gst_vpe_event (GstPad * pad, GstEvent * event)
+gst_vpe_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
-  GstVpe *self = GST_VPE (GST_OBJECT_PARENT (pad));
+  GstVpe *self = GST_VPE (parent);
   gboolean ret = TRUE;
   GST_DEBUG_OBJECT (self, "begin: event=%s", GST_EVENT_TYPE_NAME (event));
   switch (GST_EVENT_TYPE (event)) {
-    case GST_EVENT_NEWSEGMENT:
+    case GST_EVENT_CAPS:
     {
-      gboolean update;
-      GstFormat fmt;
-      gint64 start, stop, time;
-      gdouble rate, arate;
-
-      gst_event_parse_new_segment_full (event, &update, &rate, &arate, &fmt,
-          &start, &stop, &time);
-      gst_segment_set_newsegment_full (&self->segment, update,
-          rate, arate, fmt, start, stop, time);
-      GST_DEBUG_OBJECT (self, "newsegment: start %" GST_TIME_FORMAT ", stop: %"
-          GST_TIME_FORMAT ", rate: %2.2f", GST_TIME_ARGS (start),
-          GST_TIME_ARGS (stop), rate);
+      GstCaps *caps;
+      gst_event_parse_caps (event, &caps);
+      return gst_vpe_sink_setcaps (pad, caps);
+      break;
+    }
+    case GST_EVENT_SEGMENT:
+    {
+      gst_event_copy_segment (event, &self->segment);
     }
       break;
-    case GST_EVENT_CROP:
-    {
-      gint left, top, width, height;
-      gst_event_parse_crop (event, &top, &left, &width, &height);
-      GST_OBJECT_LOCK (self);
-      if (width == -1)
-        width = self->input_width - left;
-      if (height == -1)
-        height = self->input_height - top;
-      self->input_crop.c.top = top;
-      self->input_crop.c.left = left;
-      self->input_crop.c.width = width;
-      self->input_crop.c.height = height;
-      if (self->video_fd >= 0) {
-        /* Set the crop value to the driver */
-        ioctl (self->video_fd, VIDIOC_S_CROP, &self->input_crop);
-      }
-      GST_OBJECT_UNLOCK (self);
-      gst_event_unref (event);
-      return TRUE;
-    }
+
     case GST_EVENT_EOS:
       break;
     case GST_EVENT_FLUSH_STOP:
@@ -804,9 +819,9 @@ gst_vpe_event (GstPad * pad, GstEvent * event)
 }
 
 static gboolean
-gst_vpe_src_event (GstPad * pad, GstEvent * event)
+gst_vpe_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 {
-  GstVpe *self = GST_VPE (GST_OBJECT_PARENT (pad));
+  GstVpe *self = GST_VPE (parent);
   gboolean ret = TRUE;
   GST_DEBUG_OBJECT (self, "begin: event=%s", GST_EVENT_TYPE_NAME (event));
   switch (GST_EVENT_TYPE (event)) {
@@ -924,7 +939,7 @@ static void
 gst_vpe_base_init (gpointer gclass)
 {
   GstElementClass *element_class = GST_ELEMENT_CLASS (gclass);
-  gst_element_class_set_details_simple (element_class,
+  gst_element_class_set_static_metadata (element_class,
       "vpe",
       "Filter/Converter/Video",
       "Video processing adapter", "Harinarayan Bhatta <harinarayan@ti.com>");
@@ -939,48 +954,44 @@ gst_vpe_class_init (GstVpeClass * klass)
 {
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   GstElementClass *gstelement_class = GST_ELEMENT_CLASS (klass);
+  parent_class = g_type_class_peek_parent (klass);
   gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_vpe_get_property);
   gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_vpe_set_property);
   gobject_class->finalize = GST_DEBUG_FUNCPTR (gst_vpe_finalize);
   gstelement_class->change_state = GST_DEBUG_FUNCPTR (gst_vpe_change_state);
   g_object_class_install_property (gobject_class,
-      PROP_NUM_INPUT_BUFFERS, g_param_spec_int ("num-input-buffers",
+      PROP_NUM_INPUT_BUFFERS,
+      g_param_spec_int ("num-input-buffers",
           "Number of input buffers that are allocated and used by this plugin.",
           "The number if input buffers allocated should be specified based on "
           "the upstream element's requirement. For example, if gst-ducati-plugin "
           "is the upstream element, this value should be based on max-reorder-frames "
-          "property of that element. 0 => decide automatically", 0,
-          MAX_NUM_INBUFS, DEFAULT_NUM_INBUFS,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          "property of that element. 0 => decide automatically",
+          0, MAX_NUM_INBUFS,
+          DEFAULT_NUM_INBUFS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
   g_object_class_install_property (gobject_class, PROP_NUM_OUTPUT_BUFFERS,
       g_param_spec_int ("num-output-buffers",
           "Number of output buffers that are allocated and used by this plugin.",
           "The number if output buffers allocated should be specified based on "
           "the downstream element's requirement. It is generally set to the minimum "
           "value acceptable to the downstream element to reduce memory usage.",
-          3, MAX_NUM_OUTBUFS, DEFAULT_NUM_OUTBUFS,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+          3, MAX_NUM_OUTBUFS,
+          DEFAULT_NUM_OUTBUFS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
 static void
-gst_vpe_init (GstVpe * self, GstVpeClass * klass)
+gst_vpe_init (GstVpe * self, gpointer klass)
 {
   GstElementClass *gstelement_class = GST_ELEMENT_CLASS (klass);
   self->sinkpad = gst_pad_new_from_static_template (&sink_factory, "sink");
-  gst_pad_set_setcaps_function (self->sinkpad,
-      GST_DEBUG_FUNCPTR (gst_vpe_sink_setcaps));
   gst_pad_set_chain_function (self->sinkpad, GST_DEBUG_FUNCPTR (gst_vpe_chain));
   gst_pad_set_event_function (self->sinkpad, GST_DEBUG_FUNCPTR (gst_vpe_event));
-  gst_pad_set_bufferalloc_function (self->sinkpad,
-      GST_DEBUG_FUNCPTR (gst_vpe_bufferalloc));
   self->srcpad = gst_pad_new_from_static_template (&src_factory, "src");
   gst_pad_set_event_function (self->srcpad,
       GST_DEBUG_FUNCPTR (gst_vpe_src_event));
-  gst_pad_set_query_function (self->srcpad,
-      GST_DEBUG_FUNCPTR (gst_vpe_src_query));
-  gst_pad_set_getcaps_function (self->srcpad,
-      GST_DEBUG_FUNCPTR (gst_vpe_src_getcaps));
-  gst_pad_set_activatepush_function (self->srcpad, gst_vpe_activate_push);
+  gst_pad_set_query_function (self->srcpad, GST_DEBUG_FUNCPTR (gst_vpe_query));
+  gst_pad_set_query_function (self->sinkpad, GST_DEBUG_FUNCPTR (gst_vpe_query));
+  gst_pad_set_activatemode_function (self->srcpad, gst_vpe_activate_mode);
   gst_element_add_pad (GST_ELEMENT (self), self->sinkpad);
   gst_element_add_pad (GST_ELEMENT (self), self->srcpad);
   self->input_width = 0;
@@ -999,28 +1010,29 @@ gst_vpe_init (GstVpe * self, GstVpeClass * klass)
   self->video_fd = -1;
   self->input_caps = NULL;
   self->output_caps = NULL;
+  self->fixed_caps = FALSE;
   self->num_input_buffers = DEFAULT_NUM_INBUFS;
   self->num_output_buffers = DEFAULT_NUM_OUTBUFS;
   gst_segment_init (&self->segment, GST_FORMAT_UNDEFINED);
 }
 
 GST_DEBUG_CATEGORY (gst_vpe_debug);
-#include "gstvpebins.h"
+/* #include "gstvpebins.h" */
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
   GST_DEBUG_CATEGORY_INIT (gst_vpe_debug, "vpe", 0, "vpe");
-  return (gst_element_register (plugin, "vpe", GST_RANK_NONE, GST_TYPE_VPE)
-      && gst_element_register (plugin, "ducatih264decvpe",
-          GST_RANK_PRIMARY + 1, gst_vpe_ducatih264dec_get_type ())
-      && gst_element_register (plugin, "ducatimpeg2decvpe",
-          GST_RANK_PRIMARY + 1, gst_vpe_ducatimpeg2dec_get_type ())
-      && gst_element_register (plugin, "ducatimpeg4decvpe",
-          GST_RANK_PRIMARY + 1, gst_vpe_ducatimpeg4dec_get_type ())
-      && gst_element_register (plugin, "ducatijpegdecvpe",
-          GST_RANK_PRIMARY + 2, gst_vpe_ducatijpegdec_get_type ())
-      && gst_element_register (plugin, "ducativc1decvpe",
-          GST_RANK_PRIMARY + 1, gst_vpe_ducativc1dec_get_type ()));
+  return (gst_element_register (plugin, "vpe", GST_RANK_NONE, GST_TYPE_VPE));
+  /* && gst_element_register (plugin, "ducatih264decvpe",
+     GST_RANK_PRIMARY + 1, gst_vpe_ducatih264dec_get_type ())
+     && gst_element_register (plugin, "ducatimpeg2decvpe",
+     GST_RANK_PRIMARY + 1, gst_vpe_ducatimpeg2dec_get_type ())
+     && gst_element_register (plugin, "ducatimpeg4decvpe",
+     GST_RANK_PRIMARY + 1, gst_vpe_ducatimpeg4dec_get_type ())
+     && gst_element_register (plugin, "ducatijpegdecvpe",
+     GST_RANK_PRIMARY + 2, gst_vpe_ducatijpegdec_get_type ())
+     && gst_element_register (plugin, "ducativc1decvpe",
+     GST_RANK_PRIMARY + 1, gst_vpe_ducativc1dec_get_type ())); */
 }
 
 /* PACKAGE: this is usually set by autotools depending on some _INIT macro
@@ -1032,6 +1044,6 @@ plugin_init (GstPlugin * plugin)
 #define PACKAGE "vpeplugin"
 #endif
 
-GST_PLUGIN_DEFINE (GST_VERSION_MAJOR, GST_VERSION_MINOR, "vpeplugin",
+GST_PLUGIN_DEFINE (GST_VERSION_MAJOR, GST_VERSION_MINOR, vpeplugin,
     "Hardware accelerated video porst-processing using TI VPE (V4L2-M2M) driver on DRA7x SoC",
     plugin_init, VERSION, "LGPL", "GStreamer", "http://gstreamer.net/")

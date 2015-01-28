@@ -29,7 +29,7 @@
 #include <omap_drm.h>
 #include <omap_drmif.h>
 #include <gst/video/video.h>
-#include <gst/video/video-crop.h>
+#include <gst/video/gstvideometa.h>
 
 #include <linux/videodev2.h>
 #include <linux/v4l2-controls.h>
@@ -55,11 +55,6 @@ G_BEGIN_DECLS GST_DEBUG_CATEGORY_EXTERN (gst_vpe_debug);
 typedef struct _GstVpe GstVpe;
 typedef struct _GstVpeClass GstVpeClass;
 
-GType gst_vpe_buffer_get_type (void);
-#define GST_TYPE_VPE_BUFFER         (gst_vpe_buffer_get_type())
-#define GST_IS_VPE_BUFFER(obj)      (G_TYPE_CHECK_INSTANCE_TYPE ((obj), GST_TYPE_VPE_BUFFER))
-#define GST_VPE_BUFFER(obj)         (G_TYPE_CHECK_INSTANCE_CAST ((obj), GST_TYPE_VPE_BUFFER, GstVpeBuffer))
-#define GST_VPE_BUFFER_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_VPE_BUFFER, GstVpeBufferClass))
 
 GType gst_vpe_buffer_pool_get_type (void);
 #define GST_TYPE_VPE_BUFFER_POOL       (gst_vpe_buffer_pool_get_type())
@@ -68,13 +63,11 @@ GType gst_vpe_buffer_pool_get_type (void);
 #define GST_VPE_BUFFER_POOL_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST((klass), GST_TYPE_VPE_BUFFER_POOL, GstVpeBufferPoolClass))
 
 typedef struct _GstVpeBufferPool GstVpeBufferPool;
-typedef struct _GstVpeBuffer GstVpeBuffer;
 typedef struct _GstVpeBufferPoolClass GstVpeBufferPoolClass;
-typedef struct _GstVpeBufferClass GstVpeBufferClass;
 
 struct _GstVpeBufferPool
 {
-  GstMiniObject parent;
+  GstBufferPool parent;
 
   gboolean output_port;         /* if true, unusued buffers are automatically re-QBUF'd */
   GMutex lock;
@@ -86,7 +79,7 @@ struct _GstVpeBufferPool
   guint32 last_field_pushed;    /* Was the last field sent to the dirver top of bottom */
   struct GstVpeBufferPoolBufTracking
   {
-    GstVpeBuffer *buf;          /* Buffers that are part of this pool */
+    GstBuffer *buf;             /* Buffers that are part of this pool */
     gint state;                 /* state of the buffer, FREE, ALLOCATED, WITH_DRIVER */
     gint q_cnt;                 /* Number of times this buffer is queued into the driver */
   } *buf_tracking;
@@ -94,37 +87,40 @@ struct _GstVpeBufferPool
 
 struct _GstVpeBufferPoolClass
 {
-  GstMiniObjectClass parent_class;
+  GstBufferPoolClass parent_class;
 };
 
-struct _GstVpeBuffer
+typedef struct
 {
-  GstBuffer buffer;
+  GstMeta meta;
+
+  int size;
   struct omap_bo *bo;
   struct v4l2_buffer v4l2_buf;
   struct v4l2_plane v4l2_planes[2];
   GstVpeBufferPool *pool;
-};
+} GstMetaVpeBuffer;
 
-struct _GstVpeBufferClass
-{
-  GstBufferClass parent_class;
-};
 
-GstVpeBuffer *gst_vpe_buffer_new (struct omap_device *dev,
+GstBuffer *gst_vpe_buffer_new (struct omap_device *dev,
     guint32 fourcc, gint width, gint height, int index, guint32 v4l2_type);
 
+GstMetaVpeBuffer *gst_buffer_add_vpe_buffer_meta (GstBuffer * buf,
+    struct omap_device *dev, guint32 fourcc, gint width, gint height, int index,
+    guint32 v4l2_type);
+
+GstMetaVpeBuffer *gst_buffer_get_vpe_buffer_meta (GstBuffer * buf);
+
 GstVpeBufferPool *gst_vpe_buffer_pool_new (gboolean output_port,
-    guint buffer_count, guint32 v4l2_type);
+    guint buffer_count, guint32 v4l2_type, GstCaps * caps);
 
-gboolean gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstVpeBuffer * buf);
+gboolean gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstBuffer * buf);
 
-gboolean gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool,
-    GstVpeBuffer * buf);
+gboolean gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buf);
 
-GstVpeBuffer *gst_vpe_buffer_pool_dequeue (GstVpeBufferPool * pool);
+GstBuffer *gst_vpe_buffer_pool_dequeue (GstVpeBufferPool * pool);
 
-GstVpeBuffer *gst_vpe_buffer_pool_get (GstVpeBufferPool * pool);
+GstBuffer *gst_vpe_buffer_pool_get (GstVpeBufferPool * pool);
 
 void gst_vpe_buffer_pool_destroy (GstVpeBufferPool * pool);
 
@@ -147,6 +143,7 @@ struct _GstVpe
   guint32 output_fourcc;
   struct v4l2_crop input_crop;
   gboolean interlaced;
+  gboolean fixed_caps;
   gboolean passthrough;
   GstSegment segment;
   enum

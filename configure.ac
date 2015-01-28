@@ -2,11 +2,11 @@ dnl required version of autoconf
 AC_PREREQ([2.53])
 
 dnl TODO: fill in your package name and package version here
-AC_INIT([gst-vpe],[0.10.0])
+AC_INIT([gst-vpe],[1.0.0])
 
 dnl required versions of gstreamer and plugins-base
-GST_MAJORMINOR=0.10
-GST_REQUIRED=0.10.30
+GST_MAJORMINOR=1.0
+GST_REQUIRED=1.2.3
 
 AC_CONFIG_SRCDIR([src/gstvpe.c])
 AC_CONFIG_HEADERS([config.h])
@@ -79,10 +79,10 @@ PKG_CHECK_MODULES(LIBDCE, [libdce >= 1.0.0])
 dnl Check for the required version of GStreamer core (and gst-plugins-base)
 dnl This will export GST_CFLAGS and GST_LIBS variables for use in Makefile.am
 PKG_CHECK_MODULES(GST, [
-  gstreamer-0.10 >= $GST_REQUIRED
-  gstreamer-base-0.10 >= $GST_REQUIRED
-  gstreamer-plugins-base-0.10 >= $GST_REQUIRED
-  gstreamer-plugins-bad-0.10
+  gstreamer-1.0 >= $GST_REQUIRED
+  gstreamer-base-1.0 >= $GST_REQUIRED
+  gstreamer-plugins-base-1.0 >= $GST_REQUIRED
+  gstreamer-plugins-bad-1.0
 ], [
   AC_SUBST(GST_CFLAGS)
   AC_SUBST(GST_LIBS)
@@ -138,6 +138,6 @@ dnl whatevertarget_LIBS and -L flags here affect the rest of the linking
 GST_PLUGIN_LDFLAGS="-module -avoid-version -export-symbols-regex '^[_]*gst_plugin_desc\$\$' $GST_ALL_LDFLAGS"
 AC_SUBST(GST_PLUGIN_LDFLAGS)
 
-AC_CONFIG_FILES([Makefile src/Makefile tests/vpetest/Makefile tests/perf/Makefile])
+AC_CONFIG_FILES([Makefile src/Makefile])
 AC_OUTPUT
 

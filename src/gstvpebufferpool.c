@@ -43,11 +43,14 @@ enum
   BUF_WITH_DRIVER,
 };
 
-static GstMiniObjectClass *parent_class;
-
 static void gst_vpe_buffer_pool_finalize (GObject * obj);
+static GstFlowReturn gst_vpe_buffer_pool_alloc_buffer (GstBufferPool * bufpool,
+    GstBuffer ** buf, GstBufferPoolAcquireParams * params);
+static void gst_vpe_buffer_pool_release_buffer (GstBufferPool * pool,
+    GstBuffer * buffer);
 
-G_DEFINE_TYPE (GstVpeBufferPool, gst_vpe_buffer_pool, GST_TYPE_MINI_OBJECT);
+#define gst_vpe_buffer_pool_parent_class parent_class
+G_DEFINE_TYPE (GstVpeBufferPool, gst_vpe_buffer_pool, GST_TYPE_BUFFER_POOL);
 
 static void
 gst_vpe_buffer_pool_init (GstVpeBufferPool * self)
@@ -57,12 +60,15 @@ gst_vpe_buffer_pool_init (GstVpeBufferPool * self)
 static void
 gst_vpe_buffer_pool_class_init (GstVpeBufferPoolClass * klass)
 {
-  GstMiniObjectClass *mo_class = GST_MINI_OBJECT_CLASS (klass);
+  GObjectClass *mo_class = G_OBJECT_CLASS (klass);
+  GstBufferPoolClass *bclass = GST_BUFFER_POOL_CLASS (klass);
 
   parent_class = g_type_class_peek_parent (klass);
 
-  mo_class->finalize =
-      (GstMiniObjectFinalizeFunction) gst_vpe_buffer_pool_finalize;
+  bclass->alloc_buffer = gst_vpe_buffer_pool_alloc_buffer;
+  bclass->release_buffer = gst_vpe_buffer_pool_release_buffer;
+
+  mo_class->finalize = gst_vpe_buffer_pool_finalize;
 }
 
 static void
@@ -75,17 +81,21 @@ gst_vpe_buffer_pool_finalize (GObject * obj)
   g_free (pool->buf_tracking);
   g_mutex_clear (&pool->lock);
 
-  GST_MINI_OBJECT_CLASS (parent_class)->finalize (GST_MINI_OBJECT (pool));
+  G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (pool));
 }
 
 GstVpeBufferPool *
 gst_vpe_buffer_pool_new (gboolean output_port, guint buffer_count,
-    guint32 v4l2_type)
+    guint32 v4l2_type, GstCaps * caps)
 {
   GstVpeBufferPool *pool;
+  GstStructure *conf;
+  int size;
+  GstVideoInfo info;
 
-  pool = (GstVpeBufferPool *) gst_mini_object_new (GST_TYPE_VPE_BUFFER_POOL);
+  g_return_val_if_fail (caps != NULL, NULL);
 
+  pool = (GstVpeBufferPool *) g_object_new (GST_TYPE_VPE_BUFFER_POOL, NULL);
   g_return_val_if_fail (pool != NULL, NULL);
 
   pool->output_port = output_port;
@@ -97,27 +107,59 @@ gst_vpe_buffer_pool_new (gboolean output_port, guint buffer_count,
   pool->buf_tracking =
       (struct GstVpeBufferPoolBufTracking *) g_malloc0 (buffer_count *
       sizeof (struct GstVpeBufferPoolBufTracking));
+
+  /* get the present config of the buffer pool */
+  conf = gst_buffer_pool_get_config (GST_BUFFER_POOL (pool));
+  if (conf == NULL) {
+    VPE_ERROR ("NULL config obtained after get_config on the pool");
+    goto fail;
+  }
+
+  if (!gst_video_info_from_caps (&info, caps)) {
+    VPE_ERROR ("gst_video_info_from_caps failed");
+    goto fail;
+  }
+
+  /* set the config params : caps, size of the buffers, min number of buffers,
+     max number of buffers (0 for unlimited) */
+  gst_buffer_pool_config_set_params (conf, caps, GST_VIDEO_INFO_SIZE (&info), 0,
+      0);
+  if (conf == NULL) {
+    VPE_ERROR ("NULL config after set_params");
+    goto fail;
+  }
+
+  /* set config of the pool */
+  gst_buffer_pool_set_config (GST_BUFFER_POOL (pool), conf);
+
+  gst_buffer_pool_set_active (GST_BUFFER_POOL (pool), TRUE);
+
   return pool;
+fail:
+  gst_object_unref (G_OBJECT (pool));
+  return FALSE;
 }
 
 /* Put a buffer back into the pool 
  * Called either from the application or from buffer finalize handler
  */
 gboolean
-gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstVpeBuffer * buf)
+gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstBuffer * buffer)
 {
   GstVpeBufferPool *p;
   gboolean ret = TRUE;
+  GstMetaVpeBuffer *buf = gst_buffer_get_vpe_buffer_meta (buffer);
   GST_VPE_BUFFER_POOL_LOCK (pool);
 
-  VPE_DEBUG ("gst_vpe_buffer_pool_put: %p", buf);
+  VPE_DEBUG ("Entered for %s Q, buf=%p", pool->output_port ? "output" : "input",
+      buffer);
 
   if (pool->shutting_down) {
     p = buf->pool;
     buf->pool = NULL;
     GST_VPE_BUFFER_POOL_UNLOCK (pool);
     if (p)
-      gst_mini_object_unref (GST_MINI_OBJECT (p));
+      gst_object_unref (G_OBJECT (p));
     return FALSE;
   } else {
     /* Each buffer that belongs to a pool has a reference to the
@@ -125,30 +167,28 @@ gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstVpeBuffer * buf)
      * are freed */
     if (buf->pool == NULL) {
       buf->pool = (GstVpeBufferPool *)
-          gst_mini_object_ref (GST_MINI_OBJECT (pool));
+          gst_object_ref (G_OBJECT (pool));
     }
     if (pool->output_port && pool->streaming) {
       int r;
       /* QUEUE this buffer into the driver */
       r = ioctl (pool->video_fd, VIDIOC_QBUF, &buf->v4l2_buf);
       if (r < 0) {
-        VPE_ERROR ("vpebufferpool: op QBUF failed: %s, index = %d",
+        VPE_ERROR ("vpebufferpool: output QBUF failed: %s, index = %d",
             strerror (errno), buf->v4l2_buf.index);
         ret = FALSE;
       } else {
-        VPE_DEBUG ("vpebufferpool: op QBUF succeeded: index = %d",
+        VPE_DEBUG ("vpebufferpool: output QBUF succeeded: index = %d",
             buf->v4l2_buf.index);
         pool->buf_tracking[buf->v4l2_buf.index].state = BUF_WITH_DRIVER;
-        pool->buf_tracking[buf->v4l2_buf.index].buf =
-            (GstVpeBuffer *) gst_buffer_ref (GST_BUFFER (buf));
+        pool->buf_tracking[buf->v4l2_buf.index].buf = GST_BUFFER (buffer);
         pool->buf_tracking[buf->v4l2_buf.index].q_cnt = 1;
       }
     } else {
-      VPE_DEBUG ("vpebufferpool: buf marked free: index = %d",
-          buf->v4l2_buf.index);
+      VPE_DEBUG ("vpebufferpool: buf marked free: index = %d, q_cnt = %d",
+          buf->v4l2_buf.index, pool->buf_tracking[buf->v4l2_buf.index].q_cnt);
       pool->buf_tracking[buf->v4l2_buf.index].state = BUF_FREE;
-      pool->buf_tracking[buf->v4l2_buf.index].buf =
-          (GstVpeBuffer *) gst_buffer_ref (GST_BUFFER (buf));
+      pool->buf_tracking[buf->v4l2_buf.index].buf = GST_BUFFER (buffer);
       pool->buf_tracking[buf->v4l2_buf.index].q_cnt = 1;
     }
   }
@@ -159,15 +199,15 @@ gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstVpeBuffer * buf)
 /* Called to queue the buffer into the driver, if output_port flag is
  * not set
  */
-GstVpeBuffer *
+GstBuffer *
 gst_vpe_buffer_pool_dequeue (GstVpeBufferPool * pool)
 {
   int ret, i;
   struct v4l2_buffer buf;
   struct v4l2_plane planes[2];
-  GstVpeBuffer *dqbuf = NULL;
+  GstBuffer *dqbuf = NULL;
 
-  VPE_LOG ("Entered gst_vpe_buffer_pool_dequeue");
+  VPE_LOG ("Entered for %s Q", pool->output_port ? "output" : "input");
 
   GST_VPE_BUFFER_POOL_LOCK (pool);
   for (i = 0; i < pool->buffer_count; i++) {
@@ -176,24 +216,25 @@ gst_vpe_buffer_pool_dequeue (GstVpeBufferPool * pool)
     }
   }
   if (i < pool->buffer_count) {
+    GstMetaVpeBuffer *vpebuf =
+        gst_buffer_get_vpe_buffer_meta (pool->buf_tracking[i].buf);
     memset (&planes, 0, sizeof planes);
-    buf = pool->buf_tracking[i].buf->v4l2_buf;
+    buf = vpebuf->v4l2_buf;
     buf.m.planes = planes;
 
     // VPE_DEBUG("try de-queueing buffers from the driver");
     ret = ioctl (pool->video_fd, VIDIOC_DQBUF, &buf);
     if (ret < 0) {
       if (errno == EAGAIN)
-        VPE_LOG ("Non-blocking DQBUF, try again");
+        VPE_LOG ("No buffers to DQBUF from %s Q, try again",
+            pool->output_port ? "output" : "input");
       else
-        VPE_ERROR ("vpebufferpool: DQBUF failed: %s, index = %d",
+        VPE_ERROR ("vpebufferpool: DQBUF for %s failed: %s, index = %d",
+            pool->output_port ? "output" : "input",
             strerror (errno), buf.index);
       GST_VPE_BUFFER_POOL_UNLOCK (pool);
       return NULL;
     }
-
-    VPE_LOG ("DQBUF succeeded, index: %d, type: %d, field: %d",
-        buf.index, buf.type, buf.field);
 #ifdef GST_VPE_USE_FIELD_ALTERNATE
     if (!pool->output_port && pool->interlaced)
       buf.index = (buf.index >> 2);
@@ -203,6 +244,10 @@ gst_vpe_buffer_pool_dequeue (GstVpeBufferPool * pool)
       dqbuf = NULL;
     } else {
       dqbuf = pool->buf_tracking[buf.index].buf;
+      VPE_LOG
+          ("DQBUF for %s succeeded, index: %d, type: %d, field: %d, q_cnt: %d",
+          pool->output_port ? "output" : "input", buf.index, buf.type,
+          buf.field, pool->buf_tracking[buf.index].q_cnt);
     }
     if (0 < pool->buf_tracking[buf.index].q_cnt)
       pool->buf_tracking[buf.index].q_cnt--;
@@ -212,15 +257,15 @@ gst_vpe_buffer_pool_dequeue (GstVpeBufferPool * pool)
 
     if (dqbuf) {
       if (buf.timestamp.tv_sec == (time_t) - 1) {
-        GST_BUFFER_TIMESTAMP (GST_BUFFER (dqbuf)) = GST_CLOCK_TIME_NONE;
+        GST_BUFFER_PTS (dqbuf) = GST_CLOCK_TIME_NONE;
       } else {
         /* Assign a timestamp, propogated by the driver */
-        GST_BUFFER_TIMESTAMP (GST_BUFFER (dqbuf)) =
-            GST_TIMEVAL_TO_TIME (buf.timestamp);
+        GST_BUFFER_PTS (dqbuf) = GST_TIMEVAL_TO_TIME (buf.timestamp);
       }
     }
   } else {
-    VPE_LOG ("No buffers to dequeue");
+    VPE_LOG ("No buffers to dequeue from %s Q",
+        pool->output_port ? "output" : "input");
     GST_VPE_BUFFER_POOL_UNLOCK (pool);
   }
   return dqbuf;
@@ -230,15 +275,15 @@ gst_vpe_buffer_pool_dequeue (GstVpeBufferPool * pool)
  * not set
  */
 gboolean
-gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
+gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buff)
 {
   int ret = 0;
   gint q_cnt = 0;
+  GstMetaVpeBuffer *buf = gst_buffer_get_vpe_buffer_meta (buff);
   GST_VPE_BUFFER_POOL_LOCK (pool);
   if (pool->streaming) {
     VPE_DEBUG ("Queueing buffer, fd: %d", buf->v4l2_buf.m.planes[0].m.fd);
-    GST_TIME_TO_TIMEVAL (GST_BUFFER_TIMESTAMP (GST_BUFFER (buf)),
-        buf->v4l2_buf.timestamp);
+    GST_TIME_TO_TIMEVAL (GST_BUFFER_PTS (buff), buf->v4l2_buf.timestamp);
     do {
       if (pool->interlaced) {
 #ifdef GST_VPE_USE_FIELD_ALTERNATE
@@ -253,7 +298,8 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
         field_offset = buf_planes[1].data_offset >> 1;
         base_index = (buffer.index << 2);
 
-        if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buf), GST_VIDEO_BUFFER_TFF)) {
+        if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buff),
+                GST_VIDEO_BUFFER_FLAG_TFF)) {
           if (pool->last_field_pushed == 0)
             pool->last_field_pushed = V4L2_FIELD_BOTTOM;
           if (pool->last_field_pushed == V4L2_FIELD_TOP) {
@@ -292,8 +338,9 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
             break;
           }
           q_cnt++;
-          gst_buffer_ref (GST_BUFFER (buf));
-          if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buf), GST_VIDEO_BUFFER_RFF)) {
+          gst_buffer_ref (GST_BUFFER (buff));
+          if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buff),
+                  GST_VIDEO_BUFFER_FLAG_RFF)) {
             VPE_DEBUG ("Queueing V4L2_FIELD_TOP (repeating)");
             buffer = buf->v4l2_buf;
             buffer.timestamp.tv_sec = (time_t) - 1;
@@ -310,7 +357,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
               break;
             }
             q_cnt++;
-            gst_buffer_ref (GST_BUFFER (buf));
+            gst_buffer_ref (GST_BUFFER (buff));
           }
         } else {
           if (pool->last_field_pushed == 0)
@@ -351,8 +398,9 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
             break;
           }
           q_cnt++;
-          gst_buffer_ref (GST_BUFFER (buf));
-          if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buf), GST_VIDEO_BUFFER_RFF)) {
+          gst_buffer_ref (GST_BUFFER (buff));
+          if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buff),
+                  GST_VIDEO_BUFFER_FLAG_RFF)) {
             VPE_DEBUG ("Queueing V4L2_FIELD_BOTTOM (repeating)");
             buffer = buf->v4l2_buf;
             buffer.timestamp.tv_sec = (time_t) - 1;
@@ -371,7 +419,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
               break;
             }
             q_cnt++;
-            gst_buffer_ref (GST_BUFFER (buf));
+            gst_buffer_ref (GST_BUFFER (buff));
           }
         }
 #else
@@ -395,29 +443,31 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstVpeBuffer * buf)
               strerror (errno), buf->v4l2_buf.index);
           break;
         }
+        q_cnt++;
       }
-      q_cnt++;
     } while (0);
-    if (q_cnt) {
-      pool->buf_tracking[buf->v4l2_buf.index].state = BUF_WITH_DRIVER;
-      pool->buf_tracking[buf->v4l2_buf.index].q_cnt = q_cnt;
-    }
   }
+  if (q_cnt) {
+    pool->buf_tracking[buf->v4l2_buf.index].state = BUF_WITH_DRIVER;
+  }
+  pool->buf_tracking[buf->v4l2_buf.index].q_cnt = q_cnt;
+  VPE_LOG ("Q_CNT after QBUF index = %d, q_cnt: %d",
+      buf->v4l2_buf.index, q_cnt);
   GST_VPE_BUFFER_POOL_UNLOCK (pool);
 
   if (0 == q_cnt)
-    gst_buffer_unref (GST_BUFFER (buf));
+    gst_buffer_unref (GST_BUFFER (buff));
 
   return (ret == 0) ? TRUE : FALSE;
 }
 
 /* Called to get a free buffer from the pool
  */
-GstVpeBuffer *
+GstBuffer *
 gst_vpe_buffer_pool_get (GstVpeBufferPool * pool)
 {
   int r, i;
-  GstVpeBuffer *ret = NULL;
+  GstBuffer *ret = NULL;
 
   VPE_DEBUG ("Entered gst_vpe_buffer_pool_get");
   GST_VPE_BUFFER_POOL_LOCK (pool);
@@ -446,7 +496,7 @@ void
 gst_vpe_buffer_pool_destroy (GstVpeBufferPool * pool)
 {
   int i, q_cnt;
-  GstVpeBuffer *buf;
+  GstBuffer *buf;
 
   GST_VPE_BUFFER_POOL_LOCK (pool);
 
@@ -466,8 +516,8 @@ gst_vpe_buffer_pool_destroy (GstVpeBufferPool * pool)
     GST_VPE_BUFFER_POOL_LOCK (pool);
   }
   GST_VPE_BUFFER_POOL_UNLOCK (pool);
-
-  gst_mini_object_unref (GST_MINI_OBJECT (pool));
+  gst_buffer_pool_set_active (GST_BUFFER_POOL (pool), FALSE);
+  gst_object_unref (pool);
 }
 
 static gboolean
@@ -500,12 +550,14 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
 {
   gboolean ret = FALSE;
   int i, q_cnt, r, index;
-  GstVpeBuffer *buf;
+  GstBuffer *buf;
   struct v4l2_requestbuffers reqbuf;
   struct v4l2_buffer buffer;
   struct v4l2_plane buf_planes[2];
   int req_buf_count;
   int field_offset;
+  GstMetaVpeBuffer *vpebuf;
+
 
   GST_VPE_BUFFER_POOL_LOCK (pool);
   if (streaming && !pool->streaming) {
@@ -537,18 +589,21 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
       ret = FALSE;
       goto DONE;
     }
-    field_offset = pool->buf_tracking[0].buf->v4l2_planes[1].data_offset >> 1;
+    vpebuf = gst_buffer_get_vpe_buffer_meta (pool->buf_tracking[0].buf);
+    field_offset = vpebuf->v4l2_planes[1].data_offset >> 1;
     for (i = 0; i < req_buf_count; i++) {
+      GstMetaVpeBuffer *vbuf;
       index = i;
 #ifdef GST_VPE_USE_FIELD_ALTERNATE
       if (!pool->output_port && pool->interlaced)
         index = (i >> 2);
 #endif
-      buffer = pool->buf_tracking[index].buf->v4l2_buf;
+      vbuf = gst_buffer_get_vpe_buffer_meta (pool->buf_tracking[index].buf);
+      buffer = vbuf->v4l2_buf;
       buffer.m.planes = buf_planes;
       buffer.index = i;
-      buf_planes[0] = pool->buf_tracking[index].buf->v4l2_planes[0];
-      buf_planes[1] = pool->buf_tracking[index].buf->v4l2_planes[1];
+      buf_planes[0] = vbuf->v4l2_planes[0];
+      buf_planes[1] = vbuf->v4l2_planes[1];
 #ifdef GST_VPE_USE_FIELD_ALTERNATE
       if (!pool->output_port && pool->interlaced) {
         if (i & 1) {
@@ -569,27 +624,30 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
 
     if (pool->output_port) {
       for (i = 0; i < pool->buffer_count; i++) {
+        GstMetaVpeBuffer *vbuf =
+            gst_buffer_get_vpe_buffer_meta (pool->buf_tracking[i].buf);
         if (pool->buf_tracking[i].state != BUF_FREE)
           continue;
         /* QUEUE all free buffers into the driver */
-        r = ioctl (pool->video_fd, VIDIOC_QBUF,
-            &pool->buf_tracking[i].buf->v4l2_buf);
+        r = ioctl (pool->video_fd, VIDIOC_QBUF, &vbuf->v4l2_buf);
         if (r < 0) {
           VPE_ERROR ("vpebufferpool: op QBUF failed: %s, index = %d",
-              strerror (errno), pool->buf_tracking[i].buf->v4l2_buf.index);
+              strerror (errno), vbuf->v4l2_buf.index);
           ret = FALSE;
           goto DONE;
         }
         VPE_DEBUG ("vpebufferpool: op QBUF succeeded: index = %d",
-            pool->buf_tracking[i].buf->v4l2_buf.index);
+            vbuf->v4l2_buf.index);
         pool->buf_tracking[i].state = BUF_WITH_DRIVER;
         pool->buf_tracking[i].q_cnt = 1;
       }
     } else {                    // not pool->output_port
       for (i = 0; i < pool->buffer_count; i++) {
-        pool->buf_tracking[i].buf->v4l2_buf.bytesused = 0;
-        pool->buf_tracking[i].buf->v4l2_planes[0].bytesused = 0;
-        pool->buf_tracking[i].buf->v4l2_planes[1].bytesused = 0;
+        GstMetaVpeBuffer *vbuf =
+            gst_buffer_get_vpe_buffer_meta (pool->buf_tracking[i].buf);
+        vbuf->v4l2_buf.bytesused = 0;
+        vbuf->v4l2_planes[0].bytesused = 0;
+        vbuf->v4l2_planes[1].bytesused = 0;
       }
     }
     VPE_DEBUG ("Start streaming for type: %d", pool->v4l2_type);
@@ -618,4 +676,51 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
 DONE:
   GST_VPE_BUFFER_POOL_UNLOCK (pool);
   return ret;
+}
+
+static void
+gst_vpe_buffer_pool_try_dequeue (GstVpeBufferPool * pool)
+{
+  GstBuffer *buf;
+  while (1) {
+    buf = gst_vpe_buffer_pool_dequeue (pool);
+    if (buf) {
+      gst_buffer_unref (GST_BUFFER (buf));
+    } else
+      break;
+  }
+}
+
+static GstFlowReturn
+gst_vpe_buffer_pool_alloc_buffer (GstBufferPool * bufpool,
+    GstBuffer ** buf, GstBufferPoolAcquireParams * params)
+{
+  GstVpeBufferPool *pool = GST_VPE_BUFFER_POOL (bufpool);
+  if (pool->output_port)
+    do {
+      /* Try dequeueing some buffers */
+      *buf = gst_vpe_buffer_pool_dequeue (pool);
+      if (*buf) {
+        return GST_FLOW_OK;
+      }
+    } while (0);
+  else
+    do {
+      /* Try dequeueing some buffers */
+      gst_vpe_buffer_pool_try_dequeue (pool);
+      *buf = GST_BUFFER (gst_vpe_buffer_pool_get (pool));
+      if (*buf) {
+        return GST_FLOW_OK;
+      }
+      usleep (10000);
+    } while (1);
+  return GST_FLOW_ERROR;
+}
+
+static void
+gst_vpe_buffer_pool_release_buffer (GstBufferPool * pool, GstBuffer * buffer)
+{
+  if (!gst_vpe_buffer_pool_put (GST_VPE_BUFFER_POOL (pool), buffer)) {
+    VPE_DEBUG ("Failed to put the buffer to pool");
+  }
 }
