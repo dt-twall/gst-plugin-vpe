@@ -499,7 +499,7 @@ gst_vpe_buffer_pool_destroy (GstVpeBufferPool * pool)
   GstBuffer *buf;
 
   GST_VPE_BUFFER_POOL_LOCK (pool);
-
+  gst_buffer_pool_set_active (GST_BUFFER_POOL (pool), FALSE);
   pool->shutting_down = TRUE;
 
   for (i = 0; i < pool->buffer_count; i++) {
@@ -516,7 +516,6 @@ gst_vpe_buffer_pool_destroy (GstVpeBufferPool * pool)
     GST_VPE_BUFFER_POOL_LOCK (pool);
   }
   GST_VPE_BUFFER_POOL_UNLOCK (pool);
-  gst_buffer_pool_set_active (GST_BUFFER_POOL (pool), FALSE);
   gst_object_unref (pool);
 }
 
@@ -678,19 +677,6 @@ DONE:
   return ret;
 }
 
-static void
-gst_vpe_buffer_pool_try_dequeue (GstVpeBufferPool * pool)
-{
-  GstBuffer *buf;
-  while (1) {
-    buf = gst_vpe_buffer_pool_dequeue (pool);
-    if (buf) {
-      gst_buffer_unref (GST_BUFFER (buf));
-    } else
-      break;
-  }
-}
-
 static GstFlowReturn
 gst_vpe_buffer_pool_alloc_buffer (GstBufferPool * bufpool,
     GstBuffer ** buf, GstBufferPoolAcquireParams * params)
@@ -706,14 +692,12 @@ gst_vpe_buffer_pool_alloc_buffer (GstBufferPool * bufpool,
     } while (0);
   else
     do {
-      /* Try dequeueing some buffers */
-      gst_vpe_buffer_pool_try_dequeue (pool);
       *buf = GST_BUFFER (gst_vpe_buffer_pool_get (pool));
       if (*buf) {
         return GST_FLOW_OK;
       }
       usleep (10000);
-    } while (1);
+    } while (gst_buffer_pool_is_active (bufpool));
   return GST_FLOW_ERROR;
 }
 

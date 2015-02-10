@@ -403,21 +403,37 @@ gst_vpe_input_set_fmt (GstVpe * self)
 
 
 static void
-gst_vpe_output_loop (gpointer data)
+gst_vpe_dequeue_loop (gpointer data)
 {
   GstVpe *self = (GstVpe *) data;
-  GstBuffer *buf = NULL;
-  GST_OBJECT_LOCK (self);
-  if (self->output_pool)
-    (void) gst_buffer_pool_acquire_buffer (GST_BUFFER_POOL (self->output_pool),
-        &buf, NULL);
-  GST_OBJECT_UNLOCK (self);
-  if (buf) {
-    GST_DEBUG_OBJECT (self, "push: %" GST_TIME_FORMAT " (ptr %p)",
-        GST_TIME_ARGS (GST_BUFFER_PTS (buf)), buf);
-    gst_pad_push (self->srcpad, GST_BUFFER (buf));
-  } else
-    usleep (10000);
+  GstBuffer *buf;
+  while (1) {
+    buf = NULL;
+    GST_OBJECT_LOCK (self);
+    if (self->output_pool)
+      (void)
+          gst_buffer_pool_acquire_buffer (GST_BUFFER_POOL (self->output_pool),
+          &buf, NULL);
+    GST_OBJECT_UNLOCK (self);
+    if (buf) {
+      GST_DEBUG_OBJECT (self, "push: %" GST_TIME_FORMAT " (ptr %p)",
+          GST_TIME_ARGS (GST_BUFFER_PTS (buf)), buf);
+      gst_pad_push (self->srcpad, GST_BUFFER (buf));
+    } else
+      break;
+  }
+  while (1) {
+    buf = NULL;
+    GST_OBJECT_LOCK (self);
+    if (self->input_pool)
+      buf = gst_vpe_buffer_pool_dequeue (self->input_pool);
+    GST_OBJECT_UNLOCK (self);
+    if (buf) {
+      gst_buffer_unref (GST_BUFFER (buf));
+    } else
+      break;
+  }
+  usleep (10000);
 }
 
 static void
@@ -616,10 +632,10 @@ gst_vpe_activate_mode (GstPad * pad, GstObject * parent,
     GST_DEBUG_OBJECT (self, "gst_vpe_activate_mode (active = %d)", active);
     if (!active) {
       result = gst_pad_stop_task (self->srcpad);
-      GST_DEBUG_OBJECT (self, "task gst_vpe_output_loop stopped");
+      GST_DEBUG_OBJECT (self, "task gst_vpe_dequeue_loop stopped");
     } else {
       result =
-          gst_pad_start_task (self->srcpad, gst_vpe_output_loop, self, NULL);
+          gst_pad_start_task (self->srcpad, gst_vpe_dequeue_loop, self, NULL);
       GST_DEBUG_OBJECT (self, "gst_pad_start_task returned %d", result);
     }
     return result;
