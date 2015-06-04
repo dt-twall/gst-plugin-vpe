@@ -95,9 +95,9 @@ enum
 
 
 #define MAX_NUM_OUTBUFS   16
-#define MAX_NUM_INBUFS    24
+#define MAX_NUM_INBUFS    64
 #define DEFAULT_NUM_OUTBUFS   6
-#define DEFAULT_NUM_INBUFS    24
+#define DEFAULT_NUM_INBUFS    12
 
 static gboolean
 gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
@@ -132,6 +132,8 @@ gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
    */
   self->interlaced = FALSE;
   gst_structure_get_boolean (s, "interlaced", &self->interlaced);
+
+  gst_structure_get_int (s, "max-ref-frames", &self->input_max_ref_frames);
 
   if (!(gst_structure_get_int (s, "width", &w) &&
           gst_structure_get_int (s, "height", &h))) {
@@ -254,7 +256,8 @@ gst_vpe_init_output_buffers (GstVpe * self)
   }
   self->output_pool =
       gst_vpe_buffer_pool_new (TRUE, self->num_output_buffers,
-      V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, self->output_caps);
+      self->num_output_buffers, V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+      self->output_caps, NULL, NULL);
   if (!self->output_pool) {
     return FALSE;
   }
@@ -316,8 +319,19 @@ gst_vpe_output_set_fmt (GstVpe * self)
   return TRUE;
 }
 
+static GstBuffer *
+gst_vpe_alloc_inputbuffer (void *ctx, int index)
+{
+  GstVpe *self = (GstVpe *) ctx;
+
+  return gst_vpe_buffer_new (self->dev,
+      self->input_fourcc,
+      self->input_width, self->input_height, index,
+      V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
+}
+
 static gboolean
-gst_vpe_init_input_buffers (GstVpe * self, gint num_input_buffers)
+gst_vpe_init_input_buffers (GstVpe * self, gint min_num_input_buffers)
 {
   int i;
   GstBuffer *buf;
@@ -327,24 +341,13 @@ gst_vpe_init_input_buffers (GstVpe * self, gint num_input_buffers)
     return FALSE;
   }
   self->input_pool =
-      gst_vpe_buffer_pool_new (FALSE, num_input_buffers,
-      V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, self->input_caps);
+      gst_vpe_buffer_pool_new (FALSE, MAX_NUM_INBUFS, min_num_input_buffers,
+      V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, self->input_caps,
+      gst_vpe_alloc_inputbuffer, self);
   if (!self->input_pool) {
     return FALSE;
   }
 
-  for (i = 0; i < num_input_buffers; i++) {
-    buf = gst_vpe_buffer_new (self->dev,
-        self->input_fourcc,
-        self->input_width, self->input_height, i,
-        V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
-    if (!buf) {
-      return FALSE;
-    }
-
-    if (!gst_vpe_buffer_pool_put (self->input_pool, buf))
-      return FALSE;
-  }
   return TRUE;
 }
 
@@ -468,43 +471,42 @@ gst_vpe_create (GstVpe * self)
 static gboolean
 gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
 {
-  gint num_input_buffers;
+  gint min_num_input_buffers;
 
   if (!gst_vpe_create (self)) {
     return FALSE;
   }
 
-  if (!gst_vpe_parse_input_caps (self, input_caps)) {
+  if (input_caps && !gst_vpe_parse_input_caps (self, input_caps)) {
     GST_ERROR_OBJECT (self, "Could not parse/set caps");
     return FALSE;
   }
   if (self->num_input_buffers) {
-    num_input_buffers = self->num_input_buffers;
+    min_num_input_buffers = self->num_input_buffers;
+  } else if (self->input_max_ref_frames) {
+    min_num_input_buffers = self->input_max_ref_frames + 4;
   } else {
-    if (self->segment.format == GST_FORMAT_TIME &&
-        self->segment.rate < (gdouble) 0.0) {
-      /* Reverse playback needs as many buffers as possible,
-         so go for maximum */
-      num_input_buffers = 32;
-    } else {
-      /* Determine automatically. use a thumb rule size limit of less than 16MB
-       * or number of buffers to 22 */
-      num_input_buffers = ((16 * 1024 * 1024 * 2) /
-          (self->input_height * self->input_width * 3));
-      if (num_input_buffers > 16)
-        num_input_buffers = 16;
-      num_input_buffers += 6;
-    }
-    GST_WARNING_OBJECT (self, "Using automatically determined number "
-        "of input buffers: %d", num_input_buffers);
+    min_num_input_buffers = DEFAULT_NUM_INBUFS;
   }
+  if (self->segment.format == GST_FORMAT_TIME &&
+      self->segment.rate < (gdouble) 0.0) {
+    /* Reverse playback needs atleast 1 GOP buffers for re-ordering */
+    min_num_input_buffers += 30;
+    if (min_num_input_buffers > MAX_NUM_INBUFS)
+      min_num_input_buffers = MAX_NUM_INBUFS;
+  }
+  GST_WARNING_OBJECT (self, "Using min input buffers: %d",
+      min_num_input_buffers);
   GST_DEBUG_OBJECT (self, "parse/set caps done");
   if (self->input_pool == NULL) {
-    if (!gst_vpe_init_input_buffers (self, num_input_buffers)) {
+    if (!gst_vpe_init_input_buffers (self, min_num_input_buffers)) {
       GST_ERROR_OBJECT (self, "gst_vpe_init_input_buffers failed");
       return FALSE;
     }
     GST_DEBUG_OBJECT (self, "gst_vpe_init_input_buffers done");
+  } else {
+    gst_vpe_buffer_pool_set_min_buffer_count (self->input_pool,
+        min_num_input_buffers);
   }
   return TRUE;
 }
@@ -527,9 +529,20 @@ gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
       /* Call V4L2 S_FMT for input and output */
       gst_vpe_input_set_fmt (self);
       gst_vpe_output_set_fmt (self);
+
+      if (!gst_vpe_init_input_bufs (self, NULL)) {
+        GST_ERROR_OBJECT (self, "gst_vpe_init_input_bufs failed");
+      }
       if (self->input_pool)
         gst_vpe_buffer_pool_set_streaming (self->input_pool,
             self->video_fd, streaming, self->interlaced);
+
+      if (!self->output_pool) {
+        if (!gst_vpe_init_output_buffers (self)) {
+          GST_ERROR_OBJECT (self, "gst_vpe_init_output_buffers failed");
+        }
+        GST_DEBUG_OBJECT (self, "gst_vpe_init_output_buffers done");
+      }
       if (self->output_pool)
         gst_vpe_buffer_pool_set_streaming (self->output_pool,
             self->video_fd, streaming, FALSE);
@@ -555,11 +568,9 @@ gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
 static gboolean
 gst_vpe_start (GstVpe * self, GstCaps * input_caps)
 {
-  if (!self->input_pool) {
-    if (!gst_vpe_init_input_bufs (self, input_caps)) {
-      GST_ERROR_OBJECT (self, "gst_vpe_init_input_bufs failed");
-      return FALSE;
-    }
+  if (!gst_vpe_init_input_bufs (self, input_caps)) {
+    GST_ERROR_OBJECT (self, "gst_vpe_init_input_bufs failed");
+    return FALSE;
   }
 
   if (!self->output_pool) {
@@ -567,17 +578,8 @@ gst_vpe_start (GstVpe * self, GstCaps * input_caps)
       GST_ERROR_OBJECT (self, "gst_vpe_set_output_caps failed");
       return FALSE;
     }
-
-    if (!gst_vpe_init_output_buffers (self)) {
-      GST_ERROR_OBJECT (self, "gst_vpe_init_output_buffers failed");
-      return FALSE;
-    }
-    GST_DEBUG_OBJECT (self, "gst_vpe_init_output_buffers done");
   }
-
-  gst_vpe_set_streaming (self, TRUE);
   self->state = GST_VPE_ST_ACTIVE;
-
   return TRUE;
 }
 
@@ -613,6 +615,7 @@ gst_vpe_destroy (GstVpe * self)
   self->dev = NULL;
   self->input_width = 0;
   self->input_height = 0;
+  self->input_max_ref_frames = 0;
   self->output_width = 0;
   self->output_height = 0;
   self->input_crop.c.top = 0;
@@ -707,12 +710,12 @@ gst_vpe_query (GstPad * pad, GstObject * parent, GstQuery * query)
         GST_WARNING_OBJECT (self, "Plugin is shutting down, returning FALSE");
         return FALSE;
       }
-      if (G_UNLIKELY (NULL == self->input_pool)) {
-        if (!gst_vpe_init_input_bufs (self, caps)) {
-          GST_OBJECT_UNLOCK (self);
-          return FALSE;
-        }
+
+      if (!gst_vpe_init_input_bufs (self, caps)) {
+        GST_OBJECT_UNLOCK (self);
+        return FALSE;
       }
+
       gst_query_add_allocation_pool (query,
           GST_BUFFER_POOL (self->input_pool), 1, 0, self->num_input_buffers);
       GST_OBJECT_UNLOCK (self);
@@ -738,7 +741,8 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
       GST_TIME_ARGS (GST_BUFFER_PTS (buf)), buf);
 
   GST_OBJECT_LOCK (self);
-  if (G_UNLIKELY (self->state != GST_VPE_ST_ACTIVE)) {
+  if (G_UNLIKELY (self->state != GST_VPE_ST_ACTIVE &&
+          self->state != GST_VPE_ST_STREAMING)) {
     if (self->state == GST_VPE_ST_DEINIT) {
       GST_OBJECT_UNLOCK (self);
       GST_WARNING_OBJECT (self,
@@ -773,6 +777,10 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
     return gst_pad_push (self->srcpad, buf);
   }
   if (vpe_buf) {
+    if (G_UNLIKELY (self->state != GST_VPE_ST_STREAMING)) {
+      gst_vpe_set_streaming (self, TRUE);
+      self->state = GST_VPE_ST_STREAMING;
+    }
     /* Push the buffer into the V4L2 driver */
     if (!gst_vpe_buffer_pool_queue (self->input_pool, buf)) {
       GST_OBJECT_UNLOCK (self);
@@ -804,6 +812,17 @@ gst_vpe_event (GstPad * pad, GstObject * parent, GstEvent * event)
     case GST_EVENT_SEGMENT:
     {
       gst_event_copy_segment (event, &self->segment);
+
+      if (self->segment.format == GST_FORMAT_TIME &&
+          self->segment.rate < (gdouble) 0.0) {
+        GST_OBJECT_LOCK (self);
+        /* In case of reverse playback, more input buffers
+           are required */
+        if (!gst_vpe_init_input_bufs (self, NULL)) {
+          GST_ERROR_OBJECT (self, "gst_vpe_init_input_bufs failed");
+        }
+        GST_OBJECT_UNLOCK (self);
+      }
     }
       break;
 
@@ -811,11 +830,6 @@ gst_vpe_event (GstPad * pad, GstObject * parent, GstEvent * event)
       break;
     case GST_EVENT_FLUSH_STOP:
       GST_OBJECT_LOCK (self);
-      if (self->input_pool) {
-        gst_vpe_buffer_pool_destroy (self->input_pool);
-        GST_DEBUG_OBJECT (self, "gst_vpe_buffer_pool_destroy(input) done");
-      }
-      self->input_pool = NULL;
       self->state = GST_VPE_ST_INIT;
       GST_OBJECT_UNLOCK (self);
       break;
@@ -865,7 +879,7 @@ gst_vpe_change_state (GstElement * element, GstStateChange transition)
           (transition)),
       gst_element_state_get_name (GST_STATE_TRANSITION_NEXT (transition)));
   switch (transition) {
-    case GST_STATE_CHANGE_NULL_TO_READY:
+    case GST_STATE_CHANGE_READY_TO_PAUSED:
       GST_OBJECT_LOCK (self);
       self->state = GST_VPE_ST_INIT;
       GST_OBJECT_UNLOCK (self);
@@ -882,11 +896,6 @@ gst_vpe_change_state (GstElement * element, GstStateChange transition)
     case GST_STATE_CHANGE_PAUSED_TO_READY:
       GST_OBJECT_LOCK (self);
       gst_vpe_set_streaming (self, FALSE);
-      self->state = GST_VPE_ST_DEINIT;
-      GST_OBJECT_UNLOCK (self);
-      break;
-    case GST_STATE_CHANGE_READY_TO_NULL:
-      GST_OBJECT_LOCK (self);
       self->state = GST_VPE_ST_DEINIT;
       gst_vpe_destroy (self);
       GST_OBJECT_UNLOCK (self);
@@ -1012,6 +1021,7 @@ gst_vpe_init (GstVpe * self, gpointer klass)
   gst_element_add_pad (GST_ELEMENT (self), self->srcpad);
   self->input_width = 0;
   self->input_height = 0;
+  self->input_max_ref_frames = 0;
   self->input_crop.c.top = 0;
   self->input_crop.c.left = 0;
   self->input_crop.c.width = 0;

@@ -111,7 +111,6 @@ gst_buffer_add_vpe_buffer_meta (GstBuffer * buf, struct omap_device * dev,
     goto fail;
 
   vpebuf->size = 0;
-  vpebuf->pool = NULL;
   vpebuf->bo = NULL;
   memset (&vpebuf->v4l2_buf, 0, sizeof (vpebuf->v4l2_buf));
   memset (&vpebuf->v4l2_planes, 0, sizeof (vpebuf->v4l2_planes));

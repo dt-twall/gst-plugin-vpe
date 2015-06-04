@@ -64,6 +64,7 @@ GType gst_vpe_buffer_pool_get_type (void);
 
 typedef struct _GstVpeBufferPool GstVpeBufferPool;
 typedef struct _GstVpeBufferPoolClass GstVpeBufferPoolClass;
+typedef GstBuffer *(*GstVpeBufferAllocFunction) (void *ctx, int index);
 
 struct _GstVpeBufferPool
 {
@@ -75,8 +76,10 @@ struct _GstVpeBufferPool
   gboolean interlaced;          /* Whether input is interlaced */
   gint video_fd;                /* a dup(2) of the v4l2object's video_fd */
   guint32 v4l2_type;
-  guint buffer_count;
+  guint buffer_count, min_buffer_count, max_buffer_count;
   guint32 last_field_pushed;    /* Was the last field sent to the dirver top of bottom */
+  GstVpeBufferAllocFunction buffer_alloc_function;
+  void *buffer_alloc_function_ctx;
   struct GstVpeBufferPoolBufTracking
   {
     GstBuffer *buf;             /* Buffers that are part of this pool */
@@ -98,7 +101,6 @@ typedef struct
   struct omap_bo *bo;
   struct v4l2_buffer v4l2_buf;
   struct v4l2_plane v4l2_planes[2];
-  GstVpeBufferPool *pool;
 } GstMetaVpeBuffer;
 
 
@@ -112,7 +114,12 @@ GstMetaVpeBuffer *gst_buffer_add_vpe_buffer_meta (GstBuffer * buf,
 GstMetaVpeBuffer *gst_buffer_get_vpe_buffer_meta (GstBuffer * buf);
 
 GstVpeBufferPool *gst_vpe_buffer_pool_new (gboolean output_port,
-    guint buffer_count, guint32 v4l2_type, GstCaps * caps);
+    guint max_buffer_count, guint min_buffer_count, guint32 v4l2_type,
+    GstCaps * caps, GstVpeBufferAllocFunction buffer_alloc_function,
+    void *buffer_alloc_function_ctx);
+
+void gst_vpe_buffer_pool_set_min_buffer_count (GstVpeBufferPool * pool,
+    guint min_buffer_count);
 
 gboolean gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstBuffer * buf);
 
@@ -138,6 +145,7 @@ struct _GstVpe
   GstVpeBufferPool *input_pool, *output_pool;
   gint num_input_buffers, num_output_buffers;
   gint input_height, input_width;
+  gint input_max_ref_frames;
   guint32 input_fourcc;
   gint output_height, output_width;
   guint32 output_fourcc;
@@ -147,7 +155,9 @@ struct _GstVpe
   gboolean passthrough;
   GstSegment segment;
   enum
-  { GST_VPE_ST_INIT, GST_VPE_ST_ACTIVE, GST_VPE_ST_DEINIT } state;
+  { GST_VPE_ST_INIT, GST_VPE_ST_ACTIVE, GST_VPE_ST_STREAMING,
+    GST_VPE_ST_DEINIT
+  } state;
 
   gint video_fd;
   struct omap_device *dev;

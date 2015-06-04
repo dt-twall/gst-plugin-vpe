@@ -38,6 +38,7 @@
 
 enum
 {
+  BUF_UNALLOCATED,
   BUF_FREE,
   BUF_ALLOCATED,
   BUF_WITH_DRIVER,
@@ -85,8 +86,10 @@ gst_vpe_buffer_pool_finalize (GObject * obj)
 }
 
 GstVpeBufferPool *
-gst_vpe_buffer_pool_new (gboolean output_port, guint buffer_count,
-    guint32 v4l2_type, GstCaps * caps)
+gst_vpe_buffer_pool_new (gboolean output_port, guint max_buffer_count,
+    guint min_buffer_count, guint32 v4l2_type, GstCaps * caps,
+    GstVpeBufferAllocFunction buffer_alloc_function,
+    void *buffer_alloc_function_ctx)
 {
   GstVpeBufferPool *pool;
   GstStructure *conf;
@@ -103,10 +106,14 @@ gst_vpe_buffer_pool_new (gboolean output_port, guint buffer_count,
   pool->streaming = FALSE;
   pool->v4l2_type = v4l2_type;
   g_mutex_init (&pool->lock);
-  pool->buffer_count = buffer_count;
+  pool->buffer_count = max_buffer_count;
+  pool->min_buffer_count = min_buffer_count;
+  pool->max_buffer_count = max_buffer_count;
   pool->buf_tracking =
-      (struct GstVpeBufferPoolBufTracking *) g_malloc0 (buffer_count *
+      (struct GstVpeBufferPoolBufTracking *) g_malloc0 (max_buffer_count *
       sizeof (struct GstVpeBufferPoolBufTracking));
+  pool->buffer_alloc_function = buffer_alloc_function;
+  pool->buffer_alloc_function_ctx = buffer_alloc_function_ctx;
 
   /* get the present config of the buffer pool */
   conf = gst_buffer_pool_get_config (GST_BUFFER_POOL (pool));
@@ -140,6 +147,15 @@ fail:
   return FALSE;
 }
 
+void
+gst_vpe_buffer_pool_set_min_buffer_count (GstVpeBufferPool * pool,
+    guint min_buffer_count)
+{
+  GST_VPE_BUFFER_POOL_LOCK (pool);
+  pool->min_buffer_count = min_buffer_count;
+  GST_VPE_BUFFER_POOL_UNLOCK (pool);
+}
+
 /* Put a buffer back into the pool 
  * Called either from the application or from buffer finalize handler
  */
@@ -155,20 +171,10 @@ gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstBuffer * buffer)
       buffer);
 
   if (pool->shutting_down) {
-    p = buf->pool;
-    buf->pool = NULL;
     GST_VPE_BUFFER_POOL_UNLOCK (pool);
-    if (p)
-      gst_object_unref (G_OBJECT (p));
-    return FALSE;
+    gst_buffer_unref (buffer);
+    return TRUE;
   } else {
-    /* Each buffer that belongs to a pool has a reference to the
-     * pool itself so that the pool is freed only after all buffers
-     * are freed */
-    if (buf->pool == NULL) {
-      buf->pool = (GstVpeBufferPool *)
-          gst_object_ref (G_OBJECT (pool));
-    }
     if (pool->output_port && pool->streaming) {
       int r;
       /* QUEUE this buffer into the driver */
@@ -283,7 +289,10 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buff)
   GST_VPE_BUFFER_POOL_LOCK (pool);
   if (pool->streaming) {
     VPE_DEBUG ("Queueing buffer, fd: %d", buf->v4l2_buf.m.planes[0].m.fd);
-    GST_TIME_TO_TIMEVAL (GST_BUFFER_PTS (buff), buf->v4l2_buf.timestamp);
+    if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_PTS (buff)))
+      GST_TIME_TO_TIMEVAL (GST_BUFFER_PTS (buff), buf->v4l2_buf.timestamp);
+    else
+      buf->v4l2_buf.timestamp.tv_sec = (time_t) - 1;
     do {
       if (pool->interlaced) {
 #ifdef GST_VPE_USE_FIELD_ALTERNATE
@@ -466,24 +475,38 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buff)
 GstBuffer *
 gst_vpe_buffer_pool_get (GstVpeBufferPool * pool)
 {
-  int r, i;
+  int r = -1, i, bc;
   GstBuffer *ret = NULL;
 
   VPE_DEBUG ("Entered gst_vpe_buffer_pool_get");
   GST_VPE_BUFFER_POOL_LOCK (pool);
   if (!pool->shutting_down) {
-
-    for (i = 0; i < pool->buffer_count; i++) {
+    bc = (pool->streaming) ? pool->buffer_count : pool->max_buffer_count;
+    for (i = 0; i < bc; i++) {
       if (pool->buf_tracking[i].state == BUF_FREE) {
         ret = pool->buf_tracking[i].buf;
         pool->buf_tracking[i].state = BUF_ALLOCATED;
         pool->buf_tracking[i].q_cnt = 0;
         break;
       }
+      if (r == -1 && pool->buf_tracking[i].state == BUF_UNALLOCATED)
+        r = i;
+    }
+    if (NULL == ret && pool->buffer_alloc_function && r != -1) {
+      VPE_DEBUG ("Trying to allocate a buffer\n");
+      ret = pool->buffer_alloc_function (pool->buffer_alloc_function_ctx, r);
+      if (ret) {
+        pool->buf_tracking[r].buf = ret;
+        pool->buf_tracking[r].state = BUF_ALLOCATED;
+        pool->buf_tracking[r].q_cnt = 0;
+        VPE_DEBUG ("New buffer allocated, index: %d\n", r);
+        if (pool->buffer_count <= r)
+          pool->buffer_count = r + 1;
+        i = r;
+      }
     }
   }
   GST_VPE_BUFFER_POOL_UNLOCK (pool);
-  VPE_DEBUG ("Leaving gst_vpe_buffer_pool_get ret=%p", ret);
   return ret;
 }
 
@@ -560,6 +583,29 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
 
   GST_VPE_BUFFER_POOL_LOCK (pool);
   if (streaming && !pool->streaming) {
+    /* Fix the number of buffers allocated until now as final
+       and disable further allocation */
+    if (pool->buffer_alloc_function) {
+      GstBuffer *r = NULL;
+      for (i = 0; i < pool->buffer_count; i++) {
+        if (pool->buf_tracking[i].state == BUF_UNALLOCATED)
+          break;
+      }
+      for (; i < pool->min_buffer_count; i++) {
+        r = pool->buffer_alloc_function (pool->buffer_alloc_function_ctx, i);
+        if (r) {
+          pool->buf_tracking[i].buf = r;
+          pool->buf_tracking[i].state = BUF_FREE;
+          pool->buf_tracking[i].q_cnt = 1;
+          VPE_DEBUG ("New buffer allocated, index: %d\n", i);
+        } else {
+          VPE_WARNING ("Unable to allocate buffers");
+          break;
+        }
+      }
+      pool->buffer_count = i;
+      VPE_WARNING ("Fixed the number of buffers allocated to %d", i);
+    }
     pool->video_fd = dup (video_fd);
     pool->interlaced = interlaced;
     /* If field alternate mode is used, each buffer is assigned 4 indexes
@@ -616,11 +662,12 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
         VPE_ERROR ("Cant query buffers");
         return FALSE;
       }
-    }
-    VPE_DEBUG ("input query buf, plane[0], size = %d, "
-        "plane[1] size = %d",
-        buffer.m.planes[0].length, buffer.m.planes[1].length);
+      VPE_DEBUG ("query buf %s, index = %d, fd = %d, plane[0], size = %d, "
+          "plane[1] size = %d", (pool->output_port) ? "output" : "input",
+          vbuf->v4l2_buf.index, vbuf->v4l2_buf.m.planes[0].m.fd,
+          buffer.m.planes[0].length, buffer.m.planes[1].length);
 
+    }
     if (pool->output_port) {
       for (i = 0; i < pool->buffer_count; i++) {
         GstMetaVpeBuffer *vbuf =
@@ -662,13 +709,18 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
     for (i = 0; i < pool->buffer_count; i++) {
       if (pool->buf_tracking[i].state == BUF_WITH_DRIVER) {
         buf = pool->buf_tracking[i].buf;
-        pool->buf_tracking[i].state = BUF_ALLOCATED;
-        q_cnt = pool->buf_tracking[i].q_cnt;
-        pool->buf_tracking[i].q_cnt = 0;
-        GST_VPE_BUFFER_POOL_UNLOCK (pool);
-        while (q_cnt--)
-          gst_buffer_unref (GST_BUFFER (buf));
-        GST_VPE_BUFFER_POOL_LOCK (pool);
+        if (pool->output_port) {
+          pool->buf_tracking[i].state = BUF_FREE;
+          g_assert (pool->buf_tracking[i].q_cnt == 1);
+        } else {
+          pool->buf_tracking[i].state = BUF_ALLOCATED;
+          q_cnt = pool->buf_tracking[i].q_cnt;
+          pool->buf_tracking[i].q_cnt = 0;
+          GST_VPE_BUFFER_POOL_UNLOCK (pool);
+          while (q_cnt--)
+            gst_buffer_unref (GST_BUFFER (buf));
+          GST_VPE_BUFFER_POOL_LOCK (pool);
+        }
       }
     }
   }
