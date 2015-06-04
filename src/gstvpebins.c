@@ -41,15 +41,12 @@ static GstStaticPadTemplate ducatih264dec_sink_factory = GST_STATIC_PAD_TEMPLATE
         "stream-format = byte-stream, "   /* only byte-stream */
         "alignment = au, "          /* only entire frames */
         "width = (int)[ 16, 2048 ], "
-        "height = (int)[ 16, 2048 ], "
-        "framerate = (fraction)[ 0, max ],"
-        "profile = (string){constrained-baseline, baseline, main, extended};"
+        "height = (int)[ 16, 2048 ]; "
         "video/x-h264, "
         "stream-format = byte-stream, "   /* only byte-stream */
         "alignment = au, "          /* only entire frames */
         "width = (int)[ 16, 2048 ], "
         "height = (int)[ 16, 2048 ], "
-        "framerate = (fraction)[ 0, max ],"
         "profile = (string) {high, high-10-intra, high-10, high-4:2:2-intra, "
         "high-4:2:2, high-4:4:4-intra, high-4:4:4, cavlc-4:4:4-intra}, "
         "level = (string) {1, 1b, 1.1, 1.2, 1.3, 2, 2.1, 2.2, 3, 3.1, 3.2, 4, 4.1, 4.2, 5.1};")
@@ -108,21 +105,15 @@ typedef struct {               \
   GstBinClass parent_class;    \
 } type ## Class;               \
   \
-static void gst_vpe_ ## decoder_name ## _base_init    (gpointer      g_class); \
 static void gst_vpe_ ## decoder_name ## _class_init   (gpointer      g_class); \
 static void gst_vpe_ ## decoder_name ## _init         (type          *self,    \
        type ## Class *klass);\
 static GstBinClass *decoder_name ## _parent_class = NULL;        \
 static void                                                      \
 gst_vpe_ ## decoder_name ## _class_init (gpointer g_class)       \
-{                                                                \
-  decoder_name ## _parent_class =                                \
-  (GstBinClass *)g_type_class_peek_parent (g_class);             \
-}                                                                \
-static void gst_vpe_ ## decoder_name ## _base_init (gpointer gclass)         \
-{                                   \
-  GstElementClass *element_class = GST_ELEMENT_CLASS (gclass);               \
-  gst_element_class_set_static_metadata (element_class,                       \
+{                                                                            \
+  GstElementClass *element_class = GST_ELEMENT_CLASS (g_class);              \
+  gst_element_class_set_static_metadata (element_class,                      \
       #decoder_name "vpe",                                                   \
       "Codec/Decoder/Video",                                                 \
       #decoder_name " + vpe bin", "Harinarayan Bhatta <harinarayan@ti.com>");\
@@ -130,7 +121,10 @@ static void gst_vpe_ ## decoder_name ## _base_init (gpointer gclass)         \
       gst_static_pad_template_get (&decoder_name ## _sink_factory));         \
   gst_element_class_add_pad_template (element_class,                         \
       gst_static_pad_template_get (&src_factory));                           \
-}                                                                            \
+  decoder_name ## _parent_class =                                \
+  (GstBinClass *)g_type_class_peek_parent (g_class);             \
+}                                                                \
+                                                                             \
 static void gst_vpe_##decoder_name##_init (type *self, type ## Class *Klass) \
 {                                                                            \
   GstElement *dec, *vpe;                                                     \
@@ -178,18 +172,12 @@ gst_vpe_ ## decoder_name ## _get_type (void)                   \
   static volatile gsize gonce_data = 0;                        \
   if (g_once_init_enter (&gonce_data)) {                       \
   GType _type;                                                 \
-  _type = g_type_register_static_simple (GST_TYPE_BIN,                \
+  _type = g_type_register_static_simple (GST_TYPE_BIN,         \
   g_intern_static_string (#type),                              \
   sizeof (type ## Class),                                      \
-  gst_vpe_ ## decoder_name ## _base_init,                      \
-  NULL,         /* base_finalize */                            \
   (GClassInitFunc) gst_vpe_ ## decoder_name ## _class_init,    \
-  NULL,         /* class_finalize */                           \
-  NULL,               /* class_data */                         \
   sizeof (type),                                               \
-  0,                  /* n_preallocs */                        \
   (GInstanceInitFunc) gst_vpe_ ## decoder_name ## _init,       \
-  NULL,                                                        \
   (GTypeFlags) 0);                                             \
   g_once_init_leave (&gonce_data, (gsize) _type);              \
   }                                                            \

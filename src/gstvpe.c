@@ -1033,22 +1033,22 @@ gst_vpe_init (GstVpe * self, gpointer klass)
 }
 
 GST_DEBUG_CATEGORY (gst_vpe_debug);
-/* #include "gstvpebins.h" */
+#include "gstvpebins.h"
 static gboolean
 plugin_init (GstPlugin * plugin)
 {
   GST_DEBUG_CATEGORY_INIT (gst_vpe_debug, "vpe", 0, "vpe");
-  return (gst_element_register (plugin, "vpe", GST_RANK_NONE, GST_TYPE_VPE));
-  /* && gst_element_register (plugin, "ducatih264decvpe",
-     GST_RANK_PRIMARY + 1, gst_vpe_ducatih264dec_get_type ())
-     && gst_element_register (plugin, "ducatimpeg2decvpe",
-     GST_RANK_PRIMARY + 1, gst_vpe_ducatimpeg2dec_get_type ())
-     && gst_element_register (plugin, "ducatimpeg4decvpe",
-     GST_RANK_PRIMARY + 1, gst_vpe_ducatimpeg4dec_get_type ())
-     && gst_element_register (plugin, "ducatijpegdecvpe",
-     GST_RANK_PRIMARY + 2, gst_vpe_ducatijpegdec_get_type ())
-     && gst_element_register (plugin, "ducativc1decvpe",
-     GST_RANK_PRIMARY + 1, gst_vpe_ducativc1dec_get_type ())); */
+  return (gst_element_register (plugin, "vpe", GST_RANK_NONE, GST_TYPE_VPE))
+      && gst_element_register (plugin, "ducatih264decvpe",
+      GST_RANK_PRIMARY + 1, gst_vpe_ducatih264dec_get_type ())
+      && gst_element_register (plugin, "ducatimpeg2decvpe",
+      GST_RANK_PRIMARY + 1, gst_vpe_ducatimpeg2dec_get_type ())
+      && gst_element_register (plugin, "ducatimpeg4decvpe",
+      GST_RANK_PRIMARY + 1, gst_vpe_ducatimpeg4dec_get_type ())
+      && gst_element_register (plugin, "ducatijpegdecvpe",
+      GST_RANK_PRIMARY + 2, gst_vpe_ducatijpegdec_get_type ())
+      && gst_element_register (plugin, "ducativc1decvpe",
+      GST_RANK_PRIMARY + 1, gst_vpe_ducativc1dec_get_type ());
 }
 
 /* PACKAGE: this is usually set by autotools depending on some _INIT macro
