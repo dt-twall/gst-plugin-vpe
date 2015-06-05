@@ -753,8 +753,8 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
       if (self->input_crop.c.width == 0) {
         GstVideoCropMeta *crop = gst_buffer_get_video_crop_meta (buf);
         if (crop) {
-          self->input_crop.c.left = crop->y;
-          self->input_crop.c.top = crop->x;
+          self->input_crop.c.left = crop->x;
+          self->input_crop.c.top = crop->y;
           self->input_crop.c.width = crop->width;
           self->input_crop.c.height = crop->height;
         }
