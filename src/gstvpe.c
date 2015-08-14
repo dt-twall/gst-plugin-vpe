@@ -34,6 +34,7 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <libdce.h>
+#include <sched.h>
 
 #ifndef MIN
 #define MIN(a,b)     (((a) < (b)) ? (a) : (b))
@@ -90,14 +91,16 @@ enum
 {
   PROP_0,
   PROP_NUM_INPUT_BUFFERS,
-  PROP_NUM_OUTPUT_BUFFERS
+  PROP_NUM_OUTPUT_BUFFERS,
+  PROP_DEVICE
 };
 
 
 #define MAX_NUM_OUTBUFS   16
-#define MAX_NUM_INBUFS    64
+#define MAX_NUM_INBUFS    128
 #define DEFAULT_NUM_OUTBUFS   6
 #define DEFAULT_NUM_INBUFS    12
+#define DEFAULT_DEVICE        "/dev/video0"
 
 static gboolean
 gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
@@ -363,13 +366,8 @@ gst_vpe_input_set_fmt (GstVpe * self)
   fmt.fmt.pix_mp.pixelformat =
       gst_vpe_fourcc_to_pixelformat (self->input_fourcc);
   if (self->interlaced) {
-#ifdef GST_VPE_USE_FIELD_ALTERNATE
     fmt.fmt.pix_mp.height = (self->input_height >> 1);
     fmt.fmt.pix_mp.field = V4L2_FIELD_ALTERNATE;
-#else
-    fmt.fmt.pix_mp.height = self->input_height;
-    fmt.fmt.pix_mp.field = V4L2_FIELD_SEQ_TB;
-#endif
   } else {
     fmt.fmt.pix_mp.height = self->input_height;
     fmt.fmt.pix_mp.field = V4L2_FIELD_ANY;
@@ -410,10 +408,11 @@ gst_vpe_dequeue_loop (gpointer data)
 {
   GstVpe *self = (GstVpe *) data;
   GstBuffer *buf;
+  gint q_cnt;
   while (1) {
     buf = NULL;
     GST_OBJECT_LOCK (self);
-    if (self->output_pool)
+    if (self->video_fd >= 0 && self->output_pool)
       (void)
           gst_buffer_pool_acquire_buffer (GST_BUFFER_POOL (self->output_pool),
           &buf, NULL);
@@ -425,17 +424,21 @@ gst_vpe_dequeue_loop (gpointer data)
     } else
       break;
   }
-  while (1) {
-    buf = NULL;
-    GST_OBJECT_LOCK (self);
-    if (self->input_pool)
-      buf = gst_vpe_buffer_pool_dequeue (self->input_pool);
-    GST_OBJECT_UNLOCK (self);
-    if (buf) {
-      gst_buffer_unref (GST_BUFFER (buf));
-    } else
-      break;
+  GST_OBJECT_LOCK (self);
+  if (self->video_fd >= 0 && self->input_pool) {
+    while (NULL != (buf = gst_vpe_buffer_pool_dequeue (self->input_pool))) {
+      self->input_q_depth--;
+      g_assert (self->input_q_depth >= 0);
+      gst_buffer_unref (buf);
+    }
+    while (((MAX_INPUT_Q_DEPTH - self->input_q_depth) >=
+            ((self->interlaced) ? 3 : 1))
+        && (NULL != (buf = (GstBuffer *) g_queue_pop_head (&self->input_q)))
+        && (TRUE == gst_vpe_buffer_pool_queue (self->input_pool, buf, &q_cnt))) {
+      self->input_q_depth += q_cnt;
+    }
   }
+  GST_OBJECT_UNLOCK (self);
   usleep (10000);
 }
 
@@ -488,15 +491,9 @@ gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
   } else {
     min_num_input_buffers = DEFAULT_NUM_INBUFS;
   }
-  if (self->segment.format == GST_FORMAT_TIME &&
-      self->segment.rate < (gdouble) 0.0) {
-    /* Reverse playback needs atleast 1 GOP buffers for re-ordering */
-    min_num_input_buffers += 30;
-    if (min_num_input_buffers > MAX_NUM_INBUFS)
-      min_num_input_buffers = MAX_NUM_INBUFS;
-  }
-  GST_WARNING_OBJECT (self, "Using min input buffers: %d",
-      min_num_input_buffers);
+  if (min_num_input_buffers > MAX_NUM_INBUFS)
+    min_num_input_buffers = MAX_NUM_INBUFS;
+  GST_DEBUG_OBJECT (self, "Using min input buffers: %d", min_num_input_buffers);
   GST_DEBUG_OBJECT (self, "parse/set caps done");
   if (self->input_pool == NULL) {
     if (!gst_vpe_init_input_buffers (self, min_num_input_buffers)) {
@@ -515,15 +512,16 @@ static void
 gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
 {
   gboolean ret;
+  GstBuffer *buf;
   if (streaming) {
     if (self->video_fd < 0) {
-      GST_DEBUG_OBJECT (self, "Calling open(/dev/video0)");
-      self->video_fd = open ("/dev/video0", O_RDWR | O_NONBLOCK);
+      GST_DEBUG_OBJECT (self, "Calling open(%s)", self->device);
+      self->video_fd = open (self->device, O_RDWR | O_NONBLOCK);
       if (self->video_fd < 0) {
-        GST_ERROR_OBJECT (self, "Cant open /dev/video0");
+        GST_ERROR_OBJECT (self, "Cant open %s", self->device);
         return;
       }
-      GST_DEBUG_OBJECT (self, "Opened /dev/video0");
+      GST_DEBUG_OBJECT (self, "Opened %s", self->device);
       gst_vpe_print_driver_capabilities (self);
 
       /* Call V4L2 S_FMT for input and output */
@@ -546,11 +544,15 @@ gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
       if (self->output_pool)
         gst_vpe_buffer_pool_set_streaming (self->output_pool,
             self->video_fd, streaming, FALSE);
+      self->input_q_depth = 0;
     } else {
       GST_DEBUG_OBJECT (self, "streaming already on");
     }
   } else {
     if (self->video_fd >= 0) {
+      while (NULL != (buf = (GstBuffer *) g_queue_pop_head (&self->input_q))) {
+        gst_buffer_unref (buf);
+      }
       if (self->input_pool)
         gst_vpe_buffer_pool_set_streaming (self->input_pool,
             self->video_fd, streaming, self->interlaced);
@@ -586,7 +588,6 @@ gst_vpe_start (GstVpe * self, GstCaps * input_caps)
 static void
 gst_vpe_destroy (GstVpe * self)
 {
-
   gst_vpe_set_streaming (self, FALSE);
   if (self->input_caps)
     gst_caps_unref (self->input_caps);
@@ -622,7 +623,11 @@ gst_vpe_destroy (GstVpe * self)
   self->input_crop.c.left = 0;
   self->input_crop.c.width = 0;
   self->input_crop.c.height = 0;
+  if (self->device)
+    g_free (self->device);
+  self->device = NULL;
 }
+
 
 static gboolean
 gst_vpe_activate_mode (GstPad * pad, GstObject * parent,
@@ -736,6 +741,7 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 {
   GstVpe *self = GST_VPE (parent);
   GstMetaVpeBuffer *vpe_buf = gst_buffer_get_vpe_buffer_meta (buf);
+  gint q_cnt;
 
   GST_DEBUG_OBJECT (self, "chain: %" GST_TIME_FORMAT " ( ptr %p)",
       GST_TIME_ARGS (GST_BUFFER_PTS (buf)), buf);
@@ -781,10 +787,17 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
       gst_vpe_set_streaming (self, TRUE);
       self->state = GST_VPE_ST_STREAMING;
     }
-    /* Push the buffer into the V4L2 driver */
-    if (!gst_vpe_buffer_pool_queue (self->input_pool, buf)) {
-      GST_OBJECT_UNLOCK (self);
-      return GST_FLOW_ERROR;
+    if ((MAX_INPUT_Q_DEPTH - self->input_q_depth) >=
+        ((self->interlaced) ? 3 : 1)) {
+      GST_DEBUG_OBJECT (self, "Push the buffer into the V4L2 driver %d",
+          self->input_q_depth);
+      if (TRUE != gst_vpe_buffer_pool_queue (self->input_pool, buf, &q_cnt)) {
+        GST_OBJECT_UNLOCK (self);
+        return GST_FLOW_ERROR;
+      }
+      self->input_q_depth += q_cnt;
+    } else {
+      g_queue_push_tail (&self->input_q, (gpointer) buf);
     }
   } else {
     GST_WARNING_OBJECT (self,
@@ -792,6 +805,8 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
     gst_buffer_unref (buf);
   }
   GST_OBJECT_UNLOCK (self);
+  /* Allow dequeue thread to run */
+  sched_yield ();
   return GST_FLOW_OK;
 }
 
@@ -922,6 +937,9 @@ gst_vpe_get_property (GObject * obj,
     case PROP_NUM_OUTPUT_BUFFERS:
       g_value_set_int (value, self->num_output_buffers);
       break;
+    case PROP_DEVICE:
+      g_value_set_string (value, self->device);
+      break;
     default:
     {
       G_OBJECT_WARN_INVALID_PROPERTY_ID (obj, prop_id, pspec);
@@ -941,6 +959,10 @@ gst_vpe_set_property (GObject * obj,
       break;
     case PROP_NUM_OUTPUT_BUFFERS:
       self->num_output_buffers = g_value_get_int (value);
+      break;
+    case PROP_DEVICE:
+      g_free (self->device);
+      self->device = g_value_dup_string (value);
       break;
     default:
     {
@@ -1002,6 +1024,9 @@ gst_vpe_class_init (GstVpeClass * klass)
           "value acceptable to the downstream element to reduce memory usage.",
           3, MAX_NUM_OUTBUFS,
           DEFAULT_NUM_OUTBUFS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_DEVICE,
+      g_param_spec_string ("device", "Device", "Device location",
+          DEFAULT_DEVICE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 }
 
 static void
@@ -1039,6 +1064,9 @@ gst_vpe_init (GstVpe * self, gpointer klass)
   self->fixed_caps = FALSE;
   self->num_input_buffers = DEFAULT_NUM_INBUFS;
   self->num_output_buffers = DEFAULT_NUM_OUTBUFS;
+  self->device = g_strdup (DEFAULT_DEVICE);
+  g_queue_init (&self->input_q);
+  self->input_q_depth = 0;
   gst_segment_init (&self->segment, GST_FORMAT_UNDEFINED);
 }
 

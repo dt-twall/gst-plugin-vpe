@@ -42,8 +42,16 @@ G_BEGIN_DECLS GST_DEBUG_CATEGORY_EXTERN (gst_vpe_debug);
 /* align x to next highest multiple of 2^n */
 #define ALIGN2(x,n)   (((x) + ((1 << (n)) - 1)) & ~((1 << (n)) - 1))
 
-/** Use field alternate mode instead SEQ_TB */
-#define GST_VPE_USE_FIELD_ALTERNATE    1
+/* Max V4L2 buffer indexes that could be requested */
+#define MAX_REQBUF_CNT      32
+
+/* Maximum number of buffers that could be pushed into input Q.
+   Due to a bug in the V4L2 driver, omap DRM buffers are 'pinned' at
+   queueing time instead of when it is actually needed (dma-time).
+   Restricting this to a low value helps to save tiler memory.
+   Make sure that this value is less that MAX_REQBUF_CNT/2.5
+*/
+#define MAX_INPUT_Q_DEPTH   12
 
 #define GST_TYPE_VPE               (gst_vpe_get_type())
 #define GST_VPE(obj)               (G_TYPE_CHECK_INSTANCE_CAST((obj), GST_TYPE_VPE, GstVpe))
@@ -86,6 +94,8 @@ struct _GstVpeBufferPool
     gint state;                 /* state of the buffer, FREE, ALLOCATED, WITH_DRIVER */
     gint q_cnt;                 /* Number of times this buffer is queued into the driver */
   } *buf_tracking;
+  gint free_head;               /* Head pointer to a free index */
+  guint8 index_map[MAX_REQBUF_CNT];
 };
 
 struct _GstVpeBufferPoolClass
@@ -123,11 +133,10 @@ void gst_vpe_buffer_pool_set_min_buffer_count (GstVpeBufferPool * pool,
 
 gboolean gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstBuffer * buf);
 
-gboolean gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buf);
+gboolean gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buf,
+    gint * q_cnt);
 
 GstBuffer *gst_vpe_buffer_pool_dequeue (GstVpeBufferPool * pool);
-
-GstBuffer *gst_vpe_buffer_pool_get (GstVpeBufferPool * pool);
 
 void gst_vpe_buffer_pool_destroy (GstVpeBufferPool * pool);
 
@@ -161,6 +170,9 @@ struct _GstVpe
 
   gint video_fd;
   struct omap_device *dev;
+  gchar *device;
+  gint input_q_depth;
+  GQueue input_q;
 };
 
 struct _GstVpeClass
