@@ -416,6 +416,10 @@ gst_vpe_dequeue_loop (gpointer data)
       (void)
           gst_buffer_pool_acquire_buffer (GST_BUFFER_POOL (self->output_pool),
           &buf, NULL);
+    if (buf) {
+      self->output_q_processing--;
+      g_assert (self->output_q_processing >= 0);
+    }
     GST_OBJECT_UNLOCK (self);
     if (buf) {
       GST_DEBUG_OBJECT (self, "push: %" GST_TIME_FORMAT " (ptr %p)",
@@ -436,6 +440,7 @@ gst_vpe_dequeue_loop (gpointer data)
         && (NULL != (buf = (GstBuffer *) g_queue_pop_head (&self->input_q)))
         && (TRUE == gst_vpe_buffer_pool_queue (self->input_pool, buf, &q_cnt))) {
       self->input_q_depth += q_cnt;
+      self->output_q_processing += q_cnt;
     }
   }
   GST_OBJECT_UNLOCK (self);
@@ -534,6 +539,7 @@ gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
       if (self->input_pool)
         gst_vpe_buffer_pool_set_streaming (self->input_pool,
             self->video_fd, streaming, self->interlaced);
+      self->output_q_processing = 0;
 
       if (!self->output_pool) {
         if (!gst_vpe_init_output_buffers (self)) {
@@ -796,6 +802,7 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
         return GST_FLOW_ERROR;
       }
       self->input_q_depth += q_cnt;
+      self->output_q_processing += q_cnt;
     } else {
       g_queue_push_tail (&self->input_q, (gpointer) buf);
     }
@@ -842,6 +849,24 @@ gst_vpe_event (GstPad * pad, GstObject * parent, GstEvent * event)
       break;
 
     case GST_EVENT_EOS:
+      while (1) {
+        GST_OBJECT_LOCK (self);
+        if (TRUE != g_queue_is_empty (&self->input_q)) {
+          GST_DEBUG_OBJECT (self,
+              "Buffers to be pushed into the V4L2 driver %d",
+              self->input_q_depth);
+        } else if (0 != self->output_q_processing) {
+          GST_DEBUG_OBJECT (self,
+              "Buffers to be processed by the V4L2 driver %d",
+              self->output_q_processing);
+        } else {
+          GST_OBJECT_UNLOCK (self);
+          GST_DEBUG_OBJECT (self, "VPE ready for EOS");
+          break;
+        }
+        GST_OBJECT_UNLOCK (self);
+        usleep (10000);
+      }
       break;
     case GST_EVENT_FLUSH_STOP:
       GST_OBJECT_LOCK (self);
@@ -1067,6 +1092,7 @@ gst_vpe_init (GstVpe * self, gpointer klass)
   self->device = g_strdup (DEFAULT_DEVICE);
   g_queue_init (&self->input_q);
   self->input_q_depth = 0;
+  self->output_q_processing = 0;
   gst_segment_init (&self->segment, GST_FORMAT_UNDEFINED);
 }
 

@@ -172,6 +172,7 @@ struct _GstVpe
   struct omap_device *dev;
   gchar *device;
   gint input_q_depth;
+  gint output_q_processing;
   GQueue input_q;
 };
 
