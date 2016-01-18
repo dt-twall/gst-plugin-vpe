@@ -123,6 +123,8 @@ GstMetaVpeBuffer *gst_buffer_add_vpe_buffer_meta (GstBuffer * buf,
 
 GstMetaVpeBuffer *gst_buffer_get_vpe_buffer_meta (GstBuffer * buf);
 
+GstBuffer *gst_vpe_buffer_ref (GstBuffer * in);
+
 GstVpeBufferPool *gst_vpe_buffer_pool_new (gboolean output_port,
     guint max_buffer_count, guint min_buffer_count, guint32 v4l2_type,
     GstCaps * caps, GstVpeBufferAllocFunction buffer_alloc_function,
@@ -173,6 +175,9 @@ struct _GstVpe
   gchar *device;
   gint input_q_depth;
   gint output_q_processing;
+  gint input_framerate_n, input_framerate_d;
+  gint output_framerate_n, output_framerate_d;
+  gint output_repeat_rate;
   GQueue input_q;
 };
 

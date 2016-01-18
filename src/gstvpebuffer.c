@@ -215,3 +215,56 @@ gst_vpe_buffer_new (struct omap_device * dev,
 
   return buf;
 }
+
+GstBuffer *
+gst_vpe_buffer_ref (GstBuffer * in)
+{
+  GstMetaVpeBuffer *vpemeta;
+  GstMetaDmaBuf *dmabuf;
+  GstVideoCropMeta *crop, *incrop;
+  int size;
+  GstBuffer *buf;
+
+  buf = gst_buffer_new ();
+  if (!buf)
+    return NULL;
+
+  vpemeta = gst_buffer_get_vpe_buffer_meta (in);
+  if (!vpemeta) {
+    VPE_ERROR ("Failed to get vpe metadata");
+    gst_buffer_unref (buf);
+    return NULL;
+  }
+
+  gst_buffer_append_memory (buf,
+      gst_memory_new_wrapped (GST_MEMORY_FLAG_NO_SHARE,
+          omap_bo_map (vpemeta->bo), vpemeta->size, 0, vpemeta->size, NULL,
+          NULL));
+
+  /* attach dmabuf handle to buffer so that elements from other
+   * plugins can access for zero copy hw accel:
+   */
+  dmabuf =
+      gst_buffer_add_dma_buf_meta (GST_BUFFER (buf),
+      omap_bo_dmabuf (vpemeta->bo));
+  if (!dmabuf) {
+    VPE_DEBUG ("Failed to attach dmabuf to buffer");
+    gst_buffer_unref (buf);
+    return NULL;
+  }
+
+  incrop = gst_buffer_get_video_crop_meta (in);
+  if (incrop) {
+    crop = gst_buffer_add_video_crop_meta (buf);
+    if (!crop) {
+      VPE_DEBUG ("Failed to add crop meta to buffer");
+    } else {
+      crop->x = incrop->x;
+      crop->y = incrop->y;
+      crop->height = incrop->height;
+      crop->width = incrop->width;
+    }
+  }
+
+  return buf;
+}

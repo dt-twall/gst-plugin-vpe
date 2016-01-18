@@ -35,6 +35,7 @@
 #include <sys/ioctl.h>
 #include <libdce.h>
 #include <sched.h>
+#include <math.h>
 
 #ifndef MIN
 #define MIN(a,b)     (((a) < (b)) ? (a) : (b))
@@ -192,6 +193,11 @@ gst_vpe_set_output_caps (GstVpe * self)
       self->output_fourcc = GST_STR_FOURCC (fmt);
       GST_DEBUG_OBJECT (self, "Using downstream caps, fixed_caps = TRUE");
       self->fixed_caps = TRUE;
+      self->output_framerate_d = self->output_framerate_n = 0;
+      if (gst_structure_get_fraction (out_s, "framerate", &fps_n, &fps_d)) {
+        self->output_framerate_d = fps_d;
+        self->output_framerate_n = fps_n;
+      }
     }
   }
 
@@ -236,13 +242,36 @@ gst_vpe_set_output_caps (GstVpe * self)
     gst_structure_set (out_s, "pixel-aspect-ratio", GST_TYPE_FRACTION,
         par_width, par_height, NULL);
 
-  if (gst_structure_get_fraction (s, "framerate", &fps_n, &fps_d))
+  self->input_framerate_d = self->input_framerate_n = 0;
+  if (gst_structure_get_fraction (s, "framerate", &fps_n, &fps_d)) {
+    self->input_framerate_d = fps_d;
+    self->input_framerate_n = fps_n;
+  }
+  if (self->output_framerate_n == 0 && self->output_framerate_d == 0) {
+    self->output_framerate_d = self->input_framerate_d;
+    self->output_framerate_n = self->input_framerate_n;
+  }
+  if (self->output_framerate_n != 0 && self->output_framerate_d != 0) {
     gst_structure_set (out_s, "framerate", GST_TYPE_FRACTION,
-        fps_n, fps_d, NULL);
-
+        self->output_framerate_n, self->output_framerate_d, NULL);
+  }
   if (self->output_caps)
     gst_caps_unref (self->output_caps);
   self->output_caps = outcaps;
+
+  self->output_repeat_rate = 1;
+  if (self->output_framerate_n != 0 && self->output_framerate_d != 0
+      && self->input_framerate_n != 0 && self->input_framerate_d != 0) {
+    self->output_repeat_rate =
+        (gint) round (((double) self->output_framerate_n *
+            (double) self->input_framerate_d) /
+        ((double) self->input_framerate_n * (double) self->output_framerate_d));
+  }
+  GST_DEBUG_OBJECT (self,
+      "framerate conversion: from %d/%d to %d/%d, repeat_factor: %d\n",
+      self->input_framerate_n, self->input_framerate_d,
+      self->output_framerate_n, self->output_framerate_d,
+      self->output_repeat_rate);
 
   return TRUE;
 }
@@ -407,7 +436,7 @@ static void
 gst_vpe_dequeue_loop (gpointer data)
 {
   GstVpe *self = (GstVpe *) data;
-  GstBuffer *buf;
+  GstBuffer *buf, *b;
   gint q_cnt;
   while (1) {
     buf = NULL;
@@ -422,6 +451,11 @@ gst_vpe_dequeue_loop (gpointer data)
     }
     GST_OBJECT_UNLOCK (self);
     if (buf) {
+      for (q_cnt = 1; q_cnt < self->output_repeat_rate; q_cnt++) {
+        b = gst_vpe_buffer_ref (buf);
+        if (b)
+          gst_pad_push (self->srcpad, GST_BUFFER (b));
+      }
       GST_DEBUG_OBJECT (self, "push: %" GST_TIME_FORMAT " (ptr %p)",
           GST_TIME_ARGS (GST_BUFFER_PTS (buf)), buf);
       gst_pad_push (self->srcpad, GST_BUFFER (buf));
@@ -1089,6 +1123,11 @@ gst_vpe_init (GstVpe * self, gpointer klass)
   self->fixed_caps = FALSE;
   self->num_input_buffers = DEFAULT_NUM_INBUFS;
   self->num_output_buffers = DEFAULT_NUM_OUTBUFS;
+  self->input_framerate_n = 0;
+  self->input_framerate_d = 0;
+  self->output_framerate_n = 0;
+  self->output_framerate_d = 0;
+  self->output_repeat_rate = 1;
   self->device = g_strdup (DEFAULT_DEVICE);
   g_queue_init (&self->input_q);
   self->input_q_depth = 0;
