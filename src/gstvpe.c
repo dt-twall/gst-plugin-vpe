@@ -247,11 +247,11 @@ gst_vpe_set_output_caps (GstVpe * self)
     self->input_framerate_d = fps_d;
     self->input_framerate_n = fps_n;
   }
-  if (self->output_framerate_n == 0 && self->output_framerate_d == 0) {
+  if (self->output_framerate_d == 0) {
     self->output_framerate_d = self->input_framerate_d;
     self->output_framerate_n = self->input_framerate_n;
   }
-  if (self->output_framerate_n != 0 && self->output_framerate_d != 0) {
+  if (self->output_framerate_d != 0) {
     gst_structure_set (out_s, "framerate", GST_TYPE_FRACTION,
         self->output_framerate_n, self->output_framerate_d, NULL);
   }
@@ -663,6 +663,8 @@ gst_vpe_destroy (GstVpe * self)
   self->input_crop.c.left = 0;
   self->input_crop.c.width = 0;
   self->input_crop.c.height = 0;
+  self->output_framerate_d = 0;
+  self->output_repeat_rate = 1;
   if (self->device)
     g_free (self->device);
   self->device = NULL;
@@ -1123,9 +1125,6 @@ gst_vpe_init (GstVpe * self, gpointer klass)
   self->fixed_caps = FALSE;
   self->num_input_buffers = DEFAULT_NUM_INBUFS;
   self->num_output_buffers = DEFAULT_NUM_OUTBUFS;
-  self->input_framerate_n = 0;
-  self->input_framerate_d = 0;
-  self->output_framerate_n = 0;
   self->output_framerate_d = 0;
   self->output_repeat_rate = 1;
   self->device = g_strdup (DEFAULT_DEVICE);
