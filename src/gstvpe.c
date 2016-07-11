@@ -723,9 +723,9 @@ gst_vpe_getcaps (GstPad * pad)
   caps = gst_pad_get_current_caps (pad);
   if (caps == NULL) {
     GstCaps *fil = gst_pad_get_pad_template_caps (pad);
-    return gst_caps_copy (fil);
+    return fil;
   } else {
-    return gst_caps_copy (caps);
+    return caps;
   }
 }
 
@@ -766,6 +766,7 @@ gst_vpe_query (GstPad * pad, GstObject * parent, GstQuery * query)
       gst_query_add_allocation_pool (query,
           GST_BUFFER_POOL (self->input_pool), 1, 0, self->num_input_buffers);
       GST_OBJECT_UNLOCK (self);
+      gst_caps_unref (caps);    
       return TRUE;
       break;
     }
@@ -864,6 +865,7 @@ gst_vpe_event (GstPad * pad, GstObject * parent, GstEvent * event)
     {
       GstCaps *caps;
       gst_event_parse_caps (event, &caps);
+      gst_event_unref (event);
       return gst_vpe_sink_setcaps (pad, caps);
       break;
     }
