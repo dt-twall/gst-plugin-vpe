@@ -23,7 +23,6 @@ libgstvpe_la_CFLAGS = \
 libgstvpe_la_LIBADD = \
 	$(GST_LIBS) \
 	$(LIBDCE_LIBS) \
-	-lgstdmabuf-1.0 \
 	-lgstdrm-1.0 \
 	-lgstvideo-1.0
 

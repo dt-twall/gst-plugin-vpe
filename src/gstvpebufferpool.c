@@ -80,9 +80,27 @@ gst_vpe_buffer_pool_finalize (GObject * obj)
   VPE_DEBUG ("gst_vpe_buffer_pool_finalize (%s) done",
       pool->output_port ? "output" : "input");
   g_free (pool->buf_tracking);
+  if (pool->vpebufferpriv) {
+    g_hash_table_destroy (pool->vpebufferpriv);
+    pool->vpebufferpriv = NULL;
+  }
   g_mutex_clear (&pool->lock);
 
   G_OBJECT_CLASS (parent_class)->finalize (G_OBJECT (pool));
+}
+
+static void
+vpebufferpriv_free_func (GstVPEBufferPriv * priv)
+{
+  VPE_DEBUG ("Free VPE buffer, index: %d, type: %d fd: %d",
+      priv->v4l2_buf.index, priv->v4l2_buf.type, priv->v4l2_planes[0].m.fd);
+
+  /* No pool to put back to buffer into, so delete it completely */
+  if (priv->bo) {
+    /* Free the DRM buffer */
+    omap_bo_del (priv->bo);
+  }
+  g_free (priv);
 }
 
 GstVpeBufferPool *
@@ -114,6 +132,9 @@ gst_vpe_buffer_pool_new (gboolean output_port, guint max_buffer_count,
       sizeof (struct GstVpeBufferPoolBufTracking));
   pool->buffer_alloc_function = buffer_alloc_function;
   pool->buffer_alloc_function_ctx = buffer_alloc_function_ctx;
+
+  pool->vpebufferpriv = g_hash_table_new_full (g_direct_hash, g_direct_equal,
+      NULL, (GDestroyNotify) vpebufferpriv_free_func);
 
   /* get the present config of the buffer pool */
   conf = gst_buffer_pool_get_config (GST_BUFFER_POOL (pool));
@@ -164,7 +185,7 @@ gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstBuffer * buffer)
 {
   GstVpeBufferPool *p;
   gboolean ret = TRUE;
-  GstMetaVpeBuffer *buf = gst_buffer_get_vpe_buffer_meta (buffer);
+  GstVPEBufferPriv *buf = gst_buffer_get_vpe_buffer_priv (pool, buffer);
   GST_VPE_BUFFER_POOL_LOCK (pool);
 
   VPE_DEBUG ("Entered for %s Q, buf=%p", pool->output_port ? "output" : "input",
@@ -254,8 +275,8 @@ gst_vpe_buffer_pool_dequeue (GstVpeBufferPool * pool)
     }
   }
   if (i < pool->buffer_count) {
-    GstMetaVpeBuffer *vpebuf =
-        gst_buffer_get_vpe_buffer_meta (pool->buf_tracking[i].buf);
+    GstVPEBufferPriv *vpebuf =
+        gst_buffer_get_vpe_buffer_priv (pool, pool->buf_tracking[i].buf);
     memset (&planes, 0, sizeof planes);
     buf = vpebuf->v4l2_buf;
     buf.m.planes = planes;
@@ -317,7 +338,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buff,
     gint * q_cnt)
 {
   int ret = 0;
-  GstMetaVpeBuffer *buf = gst_buffer_get_vpe_buffer_meta (buff);
+  GstVPEBufferPriv *buf = gst_buffer_get_vpe_buffer_priv (pool, buff);
 
   *q_cnt = 0;
   GST_VPE_BUFFER_POOL_LOCK (pool);
@@ -558,6 +579,52 @@ gst_vpe_buffer_pool_get (GstVpeBufferPool * pool)
   return ret;
 }
 
+GstBuffer *
+gst_vpe_buffer_pool_import (GstVpeBufferPool * pool, GstBuffer * buf)
+{
+  int r = -1, i, dbufs = 0;
+  GstBuffer *ret = NULL;
+
+  VPE_DEBUG ("Entered gst_vpe_buffer_pool_get");
+  GST_VPE_BUFFER_POOL_LOCK (pool);
+  if (!pool->shutting_down) {
+    for (i = 0; i < pool->buffer_count; i++) {
+      if (pool->buf_tracking[i].state == BUF_FREE) {
+        ret = pool->buf_tracking[i].buf;
+        pool->buf_tracking[i].state = BUF_ALLOCATED;
+        pool->buf_tracking[i].q_cnt = 0;
+        break;
+      }
+      if (pool->buf_tracking[i].state == BUF_WITH_DRIVER)
+        dbufs++;
+      if (r == -1 && pool->buf_tracking[i].state == BUF_UNALLOCATED)
+        r = i;
+    }
+    /*Check fd mem */
+    if (NULL == ret && r != -1) {
+      if (!pool->streaming || dbufs < 4) {
+        VPE_WARNING ("Allocating a new input buffer index: %d/%d, %d",
+            r, pool->buffer_count, dbufs);
+        GstVpe *self = (GstVpe *) pool->buffer_alloc_function_ctx;
+        ret = gst_vpe_buffer_import (pool, self->dev,
+            self->input_fourcc,
+            self->input_width, self->input_height, r,
+            V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, buf);
+        if (ret) {
+          pool->buf_tracking[r].buf = ret;
+          pool->buf_tracking[r].state = BUF_ALLOCATED;
+          pool->buf_tracking[r].q_cnt = 0;
+          VPE_DEBUG ("New buffer allocated, index: %d", r);
+          i = r;
+        }
+      }
+    }
+  }
+  GST_VPE_BUFFER_POOL_UNLOCK (pool);
+  return ret;
+}
+
+
 /* This function makes moves to shutting down state where it waits 
  * for all buffers to be freed before freeing itself.
  *
@@ -625,7 +692,7 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
   struct v4l2_buffer buffer;
   struct v4l2_plane buf_planes[2];
   int req_buf_count;
-  GstMetaVpeBuffer *vbuf;
+  GstVPEBufferPriv *vbuf;
 
 
   GST_VPE_BUFFER_POOL_LOCK (pool);
@@ -655,7 +722,7 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
       goto DONE;
     }
 
-    vbuf = gst_buffer_get_vpe_buffer_meta (pool->buf_tracking[0].buf);
+    vbuf = gst_buffer_get_vpe_buffer_priv (pool, pool->buf_tracking[0].buf);
     buffer = vbuf->v4l2_buf;
     buffer.m.planes = buf_planes;
     buf_planes[0] = vbuf->v4l2_planes[0];
@@ -679,8 +746,8 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
 
     if (pool->output_port) {
       for (i = 0; i < pool->buffer_count; i++) {
-        GstMetaVpeBuffer *vbuf =
-            gst_buffer_get_vpe_buffer_meta (pool->buf_tracking[i].buf);
+        GstVPEBufferPriv *vbuf =
+            gst_buffer_get_vpe_buffer_priv (pool, pool->buf_tracking[i].buf);
         if (pool->buf_tracking[i].state != BUF_FREE)
           continue;
         /* QUEUE all free buffers into the driver */

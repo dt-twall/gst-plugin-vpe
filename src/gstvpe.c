@@ -101,7 +101,7 @@ enum
 #define MAX_NUM_INBUFS    128
 #define DEFAULT_NUM_OUTBUFS   6
 #define DEFAULT_NUM_INBUFS    12
-#define DEFAULT_DEVICE        "/dev/video0"
+#define DEFAULT_DEVICE        "/dev/v4l/by-path/platform-489d0000.vpe-video-index0"
 
 static gboolean
 gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
@@ -295,7 +295,7 @@ gst_vpe_init_output_buffers (GstVpe * self)
   }
 
   for (i = 0; i < self->num_output_buffers; i++) {
-    buf = gst_vpe_buffer_new (self->dev,
+    buf = gst_vpe_buffer_new (self->output_pool, self->dev,
         self->output_fourcc,
         self->output_width, self->output_height,
         i, V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
@@ -356,7 +356,7 @@ gst_vpe_alloc_inputbuffer (void *ctx, int index)
 {
   GstVpe *self = (GstVpe *) ctx;
 
-  return gst_vpe_buffer_new (self->dev,
+  return gst_vpe_buffer_new (self->input_pool, self->dev,
       self->input_fourcc,
       self->input_width, self->input_height, index,
       V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
@@ -388,6 +388,12 @@ gst_vpe_input_set_fmt (GstVpe * self)
 {
   struct v4l2_format fmt;
   int ret;
+  struct v4l2_selection sel = {
+    .type = V4L2_BUF_TYPE_VIDEO_OUTPUT,
+    .target = V4L2_SEL_TGT_CROP_DEFAULT,
+  };
+  struct v4l2_rect r;
+
   // V4L2 Stuff
   bzero (&fmt, sizeof (fmt));
   fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
@@ -422,9 +428,21 @@ gst_vpe_input_set_fmt (GstVpe * self)
         self->input_crop.c.top, self->input_crop.c.left,
         self->input_crop.c.width, self->input_crop.c.height);
 
-    ret = ioctl (self->video_fd, VIDIOC_S_CROP, &self->input_crop);
+    ret = ioctl (self->video_fd, VIDIOC_G_SELECTION, &sel);
     if (ret < 0) {
-      GST_ERROR_OBJECT (self, "VIDIOC_S_CROP failed");
+      GST_ERROR_OBJECT (self, "VIDIOC_G_SELECTION for crop failed");
+      return FALSE;
+    }
+    sel.target = V4L2_SEL_TGT_CROP;
+    r.width = self->input_crop.c.width;
+    r.height = self->input_crop.c.height;
+    r.left = self->input_crop.c.left;
+    r.top = self->input_crop.c.top;
+    sel.r = r;
+    ret = ioctl (self->video_fd, VIDIOC_S_SELECTION, &sel);
+
+    if (ret < 0) {
+      GST_ERROR_OBJECT (self, "VIDIOC_S_SELECTION for crop failed");
       return FALSE;
     }
   }
@@ -452,7 +470,7 @@ gst_vpe_dequeue_loop (gpointer data)
     GST_OBJECT_UNLOCK (self);
     if (buf) {
       for (q_cnt = 1; q_cnt < self->output_repeat_rate; q_cnt++) {
-        b = gst_vpe_buffer_ref (buf);
+        b = gst_vpe_buffer_ref (self->output_pool, buf);
         if (b)
           gst_pad_push (self->srcpad, GST_BUFFER (b));
       }
@@ -526,7 +544,7 @@ gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
   if (self->num_input_buffers) {
     min_num_input_buffers = self->num_input_buffers;
   } else if (self->input_max_ref_frames) {
-    min_num_input_buffers = self->input_max_ref_frames + 4;
+    min_num_input_buffers = MAX (4, self->input_max_ref_frames);
   } else {
     min_num_input_buffers = DEFAULT_NUM_INBUFS;
   }
@@ -765,6 +783,9 @@ gst_vpe_query (GstPad * pad, GstObject * parent, GstQuery * query)
 
       gst_query_add_allocation_pool (query,
           GST_BUFFER_POOL (self->input_pool), 1, 0, self->num_input_buffers);
+
+      gst_query_add_allocation_param (query, gst_drm_allocator_get (), NULL);
+
       GST_OBJECT_UNLOCK (self);
       gst_caps_unref (caps);    
       return TRUE;
@@ -783,8 +804,8 @@ static GstFlowReturn
 gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 {
   GstVpe *self = GST_VPE (parent);
-  GstMetaVpeBuffer *vpe_buf = gst_buffer_get_vpe_buffer_meta (buf);
   gint q_cnt;
+  GstVPEBufferPriv *vpe_buf;
 
   GST_DEBUG_OBJECT (self, "chain: %" GST_TIME_FORMAT " ( ptr %p)",
       GST_TIME_ARGS (GST_BUFFER_PTS (buf)), buf);
@@ -825,6 +846,16 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
     GST_DEBUG_OBJECT (self, "Passthrough for VPE");
     return gst_pad_push (self->srcpad, buf);
   }
+
+  vpe_buf = gst_buffer_get_vpe_buffer_priv (self->input_pool, buf);
+  if (!vpe_buf) {
+    GST_DEBUG_OBJECT (self, "Importing buffer not allocated by self %p", buf);
+    GstBuffer *in = gst_vpe_buffer_pool_import (self->input_pool, buf);
+    if (in) {
+      vpe_buf = gst_buffer_get_vpe_buffer_priv (self->input_pool, buf);
+    }
+  }
+
   if (vpe_buf) {
     if (G_UNLIKELY (self->state != GST_VPE_ST_STREAMING)) {
       gst_vpe_set_streaming (self, TRUE);
@@ -843,10 +874,6 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
     } else {
       g_queue_push_tail (&self->input_q, (gpointer) buf);
     }
-  } else {
-    GST_WARNING_OBJECT (self,
-        "This plugin does not support buffers not allocated by self %p", buf);
-    gst_buffer_unref (buf);
   }
   GST_OBJECT_UNLOCK (self);
   /* Allow dequeue thread to run */
@@ -1144,7 +1171,7 @@ plugin_init (GstPlugin * plugin)
   GST_DEBUG_CATEGORY_INIT (gst_vpe_debug, "vpe", 0, "vpe");
   return (gst_element_register (plugin, "vpe", GST_RANK_NONE, GST_TYPE_VPE))
       && gst_element_register (plugin, "ducatih264decvpe",
-      GST_RANK_PRIMARY + 1, gst_vpe_ducatih264dec_get_type ())
+      GST_RANK_PRIMARY + 2, gst_vpe_ducatih264dec_get_type ())
       && gst_element_register (plugin, "ducatimpeg2decvpe",
       GST_RANK_PRIMARY + 1, gst_vpe_ducatimpeg2dec_get_type ())
       && gst_element_register (plugin, "ducatimpeg4decvpe",

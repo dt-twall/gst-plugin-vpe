@@ -30,6 +30,7 @@
 #include <omap_drmif.h>
 #include <gst/video/video.h>
 #include <gst/video/gstvideometa.h>
+#include <gst/drm/gstdrmallocator.h>
 
 #include <linux/videodev2.h>
 #include <linux/v4l2-controls.h>
@@ -96,6 +97,7 @@ struct _GstVpeBufferPool
   } *buf_tracking;
   gint free_head;               /* Head pointer to a free index */
   guint8 index_map[MAX_REQBUF_CNT];
+  GHashTable *vpebufferpriv;
 };
 
 struct _GstVpeBufferPoolClass
@@ -103,27 +105,40 @@ struct _GstVpeBufferPoolClass
   GstBufferPoolClass parent_class;
 };
 
+
+#define GST_TYPE_VPE_BUFFER_PRIV      \
+  (gst_vpe_buffer_priv_get_type ())
+#define GST_VPE_BUFFER_PRIV(obj)      \
+  (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_VPE_BUFFER_PRIV, GstVPEBufferPriv))
+#define GST_IS_VPE_BUFFER_PRIV(obj)     \
+  (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_VPE_BUFFER_PRIV))
+
+
 typedef struct
 {
-  GstMeta meta;
-
   int size;
   struct omap_bo *bo;
   struct v4l2_buffer v4l2_buf;
   struct v4l2_plane v4l2_planes[2];
-} GstMetaVpeBuffer;
+
+}GstVPEBufferPriv;
 
 
-GstBuffer *gst_vpe_buffer_new (struct omap_device *dev,
+GType gst_vpe_buffer_priv_get_type (void);
+
+/* Returns a GstVPEBufferPriv, if it has a dmabuf fd */
+GstVPEBufferPriv * gst_vpe_buffer_priv (GstVpeBufferPool * pool, struct omap_device *dev,
+    guint32 fourcc, gint width, gint height, int index, guint32 v4l2_type, GstBuffer * buf);
+
+GstVPEBufferPriv *gst_buffer_get_vpe_buffer_priv (GstVpeBufferPool * pool, GstBuffer * buf);
+
+GstBuffer *gst_vpe_buffer_new (GstVpeBufferPool * pool, struct omap_device *dev,
     guint32 fourcc, gint width, gint height, int index, guint32 v4l2_type);
 
-GstMetaVpeBuffer *gst_buffer_add_vpe_buffer_meta (GstBuffer * buf,
-    struct omap_device *dev, guint32 fourcc, gint width, gint height, int index,
-    guint32 v4l2_type);
+GstBuffer *gst_vpe_buffer_import (GstVpeBufferPool * pool, struct omap_device *dev,
+    guint32 fourcc, gint width, gint height, int index, guint32 v4l2_type, GstBuffer * buf);
 
-GstMetaVpeBuffer *gst_buffer_get_vpe_buffer_meta (GstBuffer * buf);
-
-GstBuffer *gst_vpe_buffer_ref (GstBuffer * in);
+GstBuffer *gst_vpe_buffer_ref (GstVpeBufferPool * pool, GstBuffer * in);
 
 GstVpeBufferPool *gst_vpe_buffer_pool_new (gboolean output_port,
     guint max_buffer_count, guint min_buffer_count, guint32 v4l2_type,
@@ -134,6 +149,8 @@ void gst_vpe_buffer_pool_set_min_buffer_count (GstVpeBufferPool * pool,
     guint min_buffer_count);
 
 gboolean gst_vpe_buffer_pool_put (GstVpeBufferPool * pool, GstBuffer * buf);
+
+GstBuffer* gst_vpe_buffer_pool_import (GstVpeBufferPool * pool, GstBuffer * buf);
 
 gboolean gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buf,
     gint * q_cnt);
