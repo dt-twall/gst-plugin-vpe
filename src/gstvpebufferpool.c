@@ -339,6 +339,9 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buff,
 {
   int ret = 0;
   GstVPEBufferPriv *buf = gst_buffer_get_vpe_buffer_priv (pool, buff);
+  struct v4l2_buffer buffer;
+  struct v4l2_plane buf_planes[2];
+
 
   *q_cnt = 0;
   GST_VPE_BUFFER_POOL_LOCK (pool);
@@ -353,175 +356,27 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buff,
     buf->v4l2_planes[0].bytesused = 0;
     buf->v4l2_planes[1].bytesused = 0;
 
-    do {
-      if (pool->interlaced) {
-        struct v4l2_buffer buffer;
-        struct v4l2_plane buf_planes[2];
-        gint field_offset;
-
-        buffer = buf->v4l2_buf;
-        buffer.m.planes = buf_planes;
-        buf_planes[0] = buf->v4l2_planes[0];
-        buf_planes[1] = buf->v4l2_planes[1];
-        field_offset = buf_planes[1].data_offset >> 1;
-
-        if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buff),
-                GST_VIDEO_BUFFER_FLAG_TFF)) {
-          if (pool->last_field_pushed == 0)
-            pool->last_field_pushed = V4L2_FIELD_BOTTOM;
-          if (pool->last_field_pushed == V4L2_FIELD_TOP) {
-            VPE_WARNING
-                ("Top field was last pushed to the driver, same one turned up again");
-            ret = 0;
-            break;
-          }
-          pool->last_field_pushed = buffer.field = V4L2_FIELD_TOP;
-          buffer.index =
-              gst_vpe_buffer_pool_pop_free_index (pool, buf->v4l2_buf.index);
-          /* QUEUE this buffer into the driver */
-          VPE_DEBUG ("Queueing V4L2_FIELD_TOP first  index=%d", buffer.index);
-          ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
-          if (ret < 0) {
-            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
-                strerror (errno), buffer.index);
-            break;
-          }
-          (*q_cnt)++;
-
-          buffer = buf->v4l2_buf;
-          buffer.timestamp.tv_sec = (time_t) - 1;
-          buffer.m.planes = buf_planes;
-          buf_planes[0] = buf->v4l2_planes[0];
-          buf_planes[1] = buf->v4l2_planes[1];
-          pool->last_field_pushed = buffer.field = V4L2_FIELD_BOTTOM;
-          buf_planes[0].data_offset += field_offset;
-          buf_planes[1].data_offset += (field_offset >> 1);
-          buffer.index =
-              gst_vpe_buffer_pool_pop_free_index (pool, buf->v4l2_buf.index);
-          /* QUEUE this buffer into the driver */
-          VPE_DEBUG ("Queueing V4L2_FIELD_BOTTOM index=%d", buffer.index);
-          ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
-          if (ret < 0) {
-            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
-                strerror (errno), buffer.index);
-            break;
-          }
-          (*q_cnt)++;
-          gst_buffer_ref (GST_BUFFER (buff));
-
-          if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buff),
-                  GST_VIDEO_BUFFER_FLAG_RFF)) {
-            buffer = buf->v4l2_buf;
-            buffer.timestamp.tv_sec = (time_t) - 1;
-            buffer.m.planes = buf_planes;
-            buf_planes[0] = buf->v4l2_planes[0];
-            buf_planes[1] = buf->v4l2_planes[1];
-            pool->last_field_pushed = buffer.field = V4L2_FIELD_TOP;
-            buffer.index =
-                gst_vpe_buffer_pool_pop_free_index (pool, buf->v4l2_buf.index);
-            /* QUEUE this buffer into the driver */
-            VPE_DEBUG ("Queueing V4L2_FIELD_TOP (repeating) index=%d",
-                buffer.index);
-            ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
-            if (ret < 0) {
-              VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
-                  strerror (errno), buffer.index);
-              break;
-            }
-            (*q_cnt)++;
-            gst_buffer_ref (GST_BUFFER (buff));
-          }
-        } else {
-          if (pool->last_field_pushed == 0)
-            pool->last_field_pushed = V4L2_FIELD_TOP;
-          if (pool->last_field_pushed == V4L2_FIELD_BOTTOM) {
-            VPE_WARNING
-                ("Bottom field was last pushed to the driver, same one turned up again");
-            ret = 0;
-            break;
-          }
-          pool->last_field_pushed = buffer.field = V4L2_FIELD_BOTTOM;
-          buf_planes[0].data_offset += field_offset;
-          buf_planes[1].data_offset += (field_offset >> 1);
-          buffer.index =
-              gst_vpe_buffer_pool_pop_free_index (pool, buf->v4l2_buf.index);
-          VPE_DEBUG ("Queueing V4L2_FIELD_BOTTOM first  index=%d",
-              buffer.index);
-          /* QUEUE this buffer into the driver */
-          ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
-          if (ret < 0) {
-            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
-                strerror (errno), buffer.index);
-            break;
-          }
-          (*q_cnt)++;
-
-          buffer = buf->v4l2_buf;
-          buffer.timestamp.tv_sec = (time_t) - 1;
-          buffer.m.planes = buf_planes;
-          buf_planes[0] = buf->v4l2_planes[0];
-          buf_planes[1] = buf->v4l2_planes[1];
-          pool->last_field_pushed = buffer.field = V4L2_FIELD_TOP;
-          buffer.index =
-              gst_vpe_buffer_pool_pop_free_index (pool, buf->v4l2_buf.index);
-          /* QUEUE this buffer into the driver */
-          VPE_DEBUG ("Queueing V4L2_FIELD_TOP  index=%d", buffer.index);
-          ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
-          if (ret < 0) {
-            VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
-                strerror (errno), buffer.index);
-            break;
-          }
-          (*q_cnt)++;
-          gst_buffer_ref (GST_BUFFER (buff));
-
-          if (GST_BUFFER_FLAG_IS_SET (GST_BUFFER (buff),
-                  GST_VIDEO_BUFFER_FLAG_RFF)) {
-            buffer = buf->v4l2_buf;
-            buffer.timestamp.tv_sec = (time_t) - 1;
-            buffer.m.planes = buf_planes;
-            buf_planes[0] = buf->v4l2_planes[0];
-            buf_planes[1] = buf->v4l2_planes[1];
-            pool->last_field_pushed = buffer.field = V4L2_FIELD_BOTTOM;
-            buf_planes[0].data_offset += field_offset;
-            buf_planes[1].data_offset += (field_offset >> 1);
-            buffer.index =
-                gst_vpe_buffer_pool_pop_free_index (pool, buf->v4l2_buf.index);
-            /* QUEUE this buffer into the driver */
-            VPE_DEBUG ("Queueing V4L2_FIELD_BOTTOM (repeating) index=%d",
-                buffer.index);
-            ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
-            if (ret < 0) {
-              VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
-                  strerror (errno), buffer.index);
-              break;
-            }
-            (*q_cnt)++;
-            gst_buffer_ref (GST_BUFFER (buff));
-          }
-        }
-      } else {                  // pool->interlaced
-        struct v4l2_buffer buffer;
-        struct v4l2_plane buf_planes[2];
-
-        buffer = buf->v4l2_buf;
-        buf_planes[0] = buf->v4l2_planes[0];
-        buf_planes[1] = buf->v4l2_planes[1];
-        buffer.m.planes = buf_planes;
-        buffer.field = V4L2_FIELD_ANY;
-        buffer.index =
-            gst_vpe_buffer_pool_pop_free_index (pool, buf->v4l2_buf.index);
-        VPE_DEBUG ("Queueing V4L2_FIELD_ANY index=%d", buffer.index);
-        /* QUEUE this buffer into the driver */
-        ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
-        if (ret < 0) {
-          VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
-              strerror (errno), buffer.index);
-          break;
-        }
-        (*q_cnt)++;
-      }
-    } while (0);
+    buffer = buf->v4l2_buf;
+    buf_planes[0] = buf->v4l2_planes[0];
+    buf_planes[1] = buf->v4l2_planes[1];
+    buffer.m.planes = buf_planes;
+    buffer.index =
+        gst_vpe_buffer_pool_pop_free_index (pool, buf->v4l2_buf.index);
+    if (pool->interlaced) {
+      buffer.field = V4L2_FIELD_SEQ_TB;
+      VPE_DEBUG ("Queueing V4L2_FIELD_SEQ_TB index=%d", buffer.index);
+    } else {
+      buffer.field = V4L2_FIELD_ANY;
+      VPE_DEBUG ("Queueing V4L2_FIELD_ANY index=%d", buffer.index);
+    }
+    /* QUEUE this buffer into the driver */
+    ret = ioctl (pool->video_fd, VIDIOC_QBUF, &buffer);
+    if (ret < 0) {
+      VPE_ERROR ("vpebufferpool: QBUF failed: %s, index = %d",
+          strerror (errno), buffer.index);
+    } else {
+      (*q_cnt)++;
+    }
   }
   if ((*q_cnt)) {
     pool->buf_tracking[buf->v4l2_buf.index].state = BUF_WITH_DRIVER;

@@ -401,8 +401,8 @@ gst_vpe_input_set_fmt (GstVpe * self)
   fmt.fmt.pix_mp.pixelformat =
       gst_vpe_fourcc_to_pixelformat (self->input_fourcc);
   if (self->interlaced) {
-    fmt.fmt.pix_mp.height = (self->input_height >> 1);
-    fmt.fmt.pix_mp.field = V4L2_FIELD_ALTERNATE;
+    fmt.fmt.pix_mp.height = (self->input_height);
+    fmt.fmt.pix_mp.field = V4L2_FIELD_SEQ_TB;
   } else {
     fmt.fmt.pix_mp.height = self->input_height;
     fmt.fmt.pix_mp.field = V4L2_FIELD_ANY;
@@ -487,12 +487,15 @@ gst_vpe_dequeue_loop (gpointer data)
       g_assert (self->input_q_depth >= 0);
       gst_buffer_unref (buf);
     }
-    while (((MAX_INPUT_Q_DEPTH - self->input_q_depth) >=
-            ((self->interlaced) ? 3 : 1))
+    while (((MAX_INPUT_Q_DEPTH - self->input_q_depth) >= 1)
         && (NULL != (buf = (GstBuffer *) g_queue_pop_head (&self->input_q)))
         && (TRUE == gst_vpe_buffer_pool_queue (self->input_pool, buf, &q_cnt))) {
       self->input_q_depth += q_cnt;
-      self->output_q_processing += q_cnt;
+      if (self->interlaced) {
+        self->output_q_processing += q_cnt * 2;
+      } else {
+        self->output_q_processing += q_cnt;
+      }
     }
   }
   GST_OBJECT_UNLOCK (self);
@@ -787,7 +790,7 @@ gst_vpe_query (GstPad * pad, GstObject * parent, GstQuery * query)
       gst_query_add_allocation_param (query, gst_drm_allocator_get (), NULL);
 
       GST_OBJECT_UNLOCK (self);
-      gst_caps_unref (caps);    
+      gst_caps_unref (caps);
       return TRUE;
       break;
     }
@@ -861,8 +864,7 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
       gst_vpe_set_streaming (self, TRUE);
       self->state = GST_VPE_ST_STREAMING;
     }
-    if ((MAX_INPUT_Q_DEPTH - self->input_q_depth) >=
-        ((self->interlaced) ? 3 : 1)) {
+    if ((MAX_INPUT_Q_DEPTH - self->input_q_depth) >= 1) {
       GST_DEBUG_OBJECT (self, "Push the buffer into the V4L2 driver %d",
           self->input_q_depth);
       if (TRUE != gst_vpe_buffer_pool_queue (self->input_pool, buf, &q_cnt)) {
@@ -870,7 +872,11 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
         return GST_FLOW_ERROR;
       }
       self->input_q_depth += q_cnt;
-      self->output_q_processing += q_cnt;
+      if (self->interlaced) {
+        self->output_q_processing += q_cnt * 2;
+      } else {
+        self->output_q_processing += q_cnt;
+      }
     } else {
       g_queue_push_tail (&self->input_q, (gpointer) buf);
     }
