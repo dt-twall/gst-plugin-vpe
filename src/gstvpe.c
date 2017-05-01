@@ -337,6 +337,7 @@ gst_vpe_output_set_fmt (GstVpe * self)
   fmt.fmt.pix_mp.pixelformat =
       gst_vpe_fourcc_to_pixelformat (self->output_fourcc);
   fmt.fmt.pix_mp.field = V4L2_FIELD_ANY;
+  fmt.fmt.pix_mp.num_planes = 1;
   GST_DEBUG_OBJECT (self, "vpe: output S_FMT image: %dx%d",
       fmt.fmt.pix_mp.width, fmt.fmt.pix_mp.height);
   ret = ioctl (self->video_fd, VIDIOC_S_FMT, &fmt);
@@ -407,6 +408,7 @@ gst_vpe_input_set_fmt (GstVpe * self)
     fmt.fmt.pix_mp.height = self->input_height;
     fmt.fmt.pix_mp.field = V4L2_FIELD_ANY;
   }
+  fmt.fmt.pix_mp.num_planes = 1;
 
   GST_DEBUG_OBJECT (self,
       "input S_FMT field: %d, image: %dx%d, numbufs: %d",

@@ -208,10 +208,8 @@ gst_vpe_buffer_priv (GstVpeBufferPool * pool, struct omap_device * dev,
     case GST_MAKE_FOURCC ('N', 'V', '1', '2'):
       vpebuf->size = (width * height * 3) / 2;
       vpebuf->bo = omap_bo_from_dmabuf (dev, fd_copy);
-      vpebuf->v4l2_buf.length = 2;
-      vpebuf->v4l2_buf.m.planes[1].m.fd =
-          vpebuf->v4l2_buf.m.planes[0].m.fd = fd_copy;
-      vpebuf->v4l2_buf.m.planes[1].data_offset = width * height;
+      vpebuf->v4l2_buf.length = 1;
+      vpebuf->v4l2_buf.m.planes[0].m.fd = fd_copy;
       break;
     default:
       VPE_ERROR ("invalid format: 0x%08x", fourcc);
