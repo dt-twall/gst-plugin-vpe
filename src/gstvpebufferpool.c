@@ -341,6 +341,7 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buff,
   GstVPEBufferPriv *buf = gst_buffer_get_vpe_buffer_priv (pool, buff);
   struct v4l2_buffer buffer;
   struct v4l2_plane buf_planes[2];
+  struct v4l2_format *fmt;
 
 
   *q_cnt = 0;
@@ -352,9 +353,12 @@ gst_vpe_buffer_pool_queue (GstVpeBufferPool * pool, GstBuffer * buff,
     else
       buf->v4l2_buf.timestamp.tv_sec = (time_t) - 1;
 
-    buf->v4l2_buf.bytesused = 0;
-    buf->v4l2_planes[0].bytesused = 0;
-    buf->v4l2_planes[1].bytesused = 0;
+    buf->v4l2_planes[0].bytesused =
+        pool->format->fmt.pix_mp.plane_fmt[0].sizeimage;
+    buf->v4l2_planes[0].length = buf->v4l2_planes[0].bytesused;
+    buf->v4l2_planes[1].bytesused =
+        pool->format->fmt.pix_mp.plane_fmt[1].sizeimage;
+    buf->v4l2_planes[1].length = buf->v4l2_planes[1].bytesused;
 
     buffer = buf->v4l2_buf;
     buf_planes[0] = buf->v4l2_planes[0];
@@ -605,6 +609,12 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
             gst_buffer_get_vpe_buffer_priv (pool, pool->buf_tracking[i].buf);
         if (pool->buf_tracking[i].state != BUF_FREE)
           continue;
+        vbuf->v4l2_planes[0].bytesused =
+            pool->format->fmt.pix_mp.plane_fmt[0].sizeimage;
+        vbuf->v4l2_planes[0].length = vbuf->v4l2_planes[0].bytesused;
+        vbuf->v4l2_planes[1].bytesused =
+            pool->format->fmt.pix_mp.plane_fmt[1].sizeimage;
+        vbuf->v4l2_planes[1].length = vbuf->v4l2_planes[1].bytesused;
         /* QUEUE all free buffers into the driver */
         r = ioctl (pool->video_fd, VIDIOC_QBUF, &vbuf->v4l2_buf);
         if (r < 0) {

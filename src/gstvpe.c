@@ -294,6 +294,8 @@ gst_vpe_init_output_buffers (GstVpe * self)
     return FALSE;
   }
 
+  self->output_pool->format = &self->output_format;
+
   for (i = 0; i < self->num_output_buffers; i++) {
     buf = gst_vpe_buffer_new (self->output_pool, self->dev,
         self->output_fourcc,
@@ -348,6 +350,8 @@ gst_vpe_output_set_fmt (GstVpe * self)
     GST_DEBUG_OBJECT (self, "sizeimage[0] = %d, sizeimage[1] = %d",
         fmt.fmt.pix_mp.plane_fmt[0].sizeimage,
         fmt.fmt.pix_mp.plane_fmt[1].sizeimage);
+    /* Save a copy of the current format for this pool */
+    self->output_format = fmt;
   }
   return TRUE;
 }
@@ -381,6 +385,7 @@ gst_vpe_init_input_buffers (GstVpe * self, gint min_num_input_buffers)
     return FALSE;
   }
 
+  self->input_pool->format = &self->input_format;
   return TRUE;
 }
 
@@ -422,6 +427,8 @@ gst_vpe_input_set_fmt (GstVpe * self)
     GST_DEBUG_OBJECT (self, "sizeimage[0] = %d, sizeimage[1] = %d",
         fmt.fmt.pix_mp.plane_fmt[0].sizeimage,
         fmt.fmt.pix_mp.plane_fmt[1].sizeimage);
+    /* Save a copy of the current format for this pool */
+    self->input_format = fmt;
   }
 
   if (self->input_crop.c.width != 0) {

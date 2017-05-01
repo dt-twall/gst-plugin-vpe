@@ -85,6 +85,7 @@ struct _GstVpeBufferPool
   gboolean interlaced;          /* Whether input is interlaced */
   gint video_fd;                /* a dup(2) of the v4l2object's video_fd */
   guint32 v4l2_type;
+  struct v4l2_format *format;    /* Keep a reference to the current format associated to this pool */
   guint buffer_count, min_buffer_count, max_buffer_count;
   guint32 last_field_pushed;    /* Was the last field sent to the dirver top of bottom */
   GstVpeBufferAllocFunction buffer_alloc_function;
@@ -178,6 +179,8 @@ struct _GstVpe
   gint output_height, output_width;
   guint32 output_fourcc;
   struct v4l2_crop input_crop;
+  struct v4l2_format input_format;
+  struct v4l2_format output_format;
   gboolean interlaced;
   gboolean fixed_caps;
   gboolean passthrough;
