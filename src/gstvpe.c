@@ -556,7 +556,7 @@ gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
   if (self->num_input_buffers) {
     min_num_input_buffers = self->num_input_buffers;
   } else if (self->input_max_ref_frames) {
-    min_num_input_buffers = MAX (4, self->input_max_ref_frames);
+    min_num_input_buffers = MAX (6, self->input_max_ref_frames);
   } else {
     min_num_input_buffers = DEFAULT_NUM_INBUFS;
   }
