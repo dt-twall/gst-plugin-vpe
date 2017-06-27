@@ -27,7 +27,8 @@
 static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("NV12")));
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("RGB")));
+    //GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("NV12")));
 
 /* HACK!!: The following sink caps are copied from gst-plugins-ducati source
  * If something changes there, the same should be changed here as well !!
