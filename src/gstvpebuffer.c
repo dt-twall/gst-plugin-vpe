@@ -32,21 +32,22 @@ gst_buffer_get_vpe_buffer_priv (GstVpeBufferPool * pool, GstBuffer * buf)
   GstMemory *mem;
   GstVPEBufferPriv *vpemeta;
 
-  printf("GstVpeBufferPool->vpebufferpriv: %p, GstBuffer: %p\n", pool->vpebufferpriv, buf);
+  printf ("GstVpeBufferPool->vpebufferpriv: %p, GstBuffer: %p\n",
+      pool->vpebufferpriv, buf);
   mem = gst_buffer_peek_memory (buf, 0);
-  if(mem == NULL){
-    printf("gstvpebuffer.c: failed to peek into gstbuffer\n");
+  if (mem == NULL) {
+    printf ("gstvpebuffer.c: failed to peek into gstbuffer\n");
   }
 
   fd_copy = gst_fd_memory_get_fd (mem);
-  printf("gstvpebuffer.c: fd_copy: %d\n", fd_copy);
-  if(fd_copy == 0){
-    printf("gstvpebuffer.c: did not receive fd_copy\n");
+  printf ("gstvpebuffer.c: fd_copy: %d\n", fd_copy);
+  if (fd_copy == 0) {
+    printf ("gstvpebuffer.c: did not receive fd_copy\n");
   }
 
   vpemeta = g_hash_table_lookup (pool->vpebufferpriv, (gpointer) fd_copy);
-  if(vpemeta == NULL){
-    printf("gstvpebuffer.c: did not receive vpemeta\n");
+  if (vpemeta == NULL) {
+    printf ("gstvpebuffer.c: did not receive vpemeta\n");
   }
   return vpemeta;
 }
@@ -74,11 +75,12 @@ gst_vpe_buffer_new (GstVpeBufferPool * pool, struct omap_device * dev,
       size = width * height * 2;
       break;
     case GST_MAKE_FOURCC ('N', 'V', '1', '2'):
+      printf ("gstvpebuffer.c:gst_vpe_buffer_new, entered through NV12\n");
       size = (width * height * 3) / 2;
       break;
     case GST_VIDEO_FORMAT_RGB:
-      //printf("gstvpebuffer.c:68, entered through GST_VIDEO_FORMAT_RGB\n");
-    //case GST_MAKE_FOURCC('R', 'G', 'B', 24):
+      printf
+          ("gstvpebuffer.c:gst_vpe_buffer_new, entered through GST_VIDEO_FORMAT_RGB\n");
       size = (width * height * 3);
       break;
   }
@@ -89,6 +91,7 @@ gst_vpe_buffer_new (GstVpeBufferPool * pool, struct omap_device * dev,
       fourcc, width, height, index, v4l2_type, buf);
 
   if (!vpemeta) {
+    printf ("gstvpebuffer.c:gst_vpe_buffer_new: failed to add vpe metadata\n");
     VPE_ERROR ("Failed to add vpe metadata");
     gst_buffer_unref (buf);
     return NULL;
@@ -223,16 +226,18 @@ gst_vpe_buffer_priv (GstVpeBufferPool * pool, struct omap_device * dev,
       vpebuf->v4l2_buf.m.planes[0].m.fd = fd_copy;
       break;
     case GST_MAKE_FOURCC ('N', 'V', '1', '2'):
+      printf ("gstvpebuffer.c:gst_vpe_buffer_priv: entered case NV12\n");
       vpebuf->size = (width * height * 3) / 2;
       vpebuf->bo = omap_bo_from_dmabuf (dev, fd_copy);
       vpebuf->v4l2_buf.length = 1;
       vpebuf->v4l2_buf.m.planes[0].m.fd = fd_copy;
       break;
-    case GST_VIDEO_FORMAT_RGB: 
-      printf("gstvpebuffer.c:gst_vpe_buffer_priv: entered case GST_VIDEO_FORMAT_RGB\n");
+    case GST_VIDEO_FORMAT_RGB:
+      printf
+          ("gstvpebuffer.c:gst_vpe_buffer_priv: entered case GST_VIDEO_FORMAT_RGB\n");
       vpebuf->size = (width * height * 3);
-      vpebuf->bo = omap_bo_from_dmabuf(dev, fd_copy);
-      vpebuf->v4l2_buf.length = 1; //don't know if this is correct.  
+      vpebuf->bo = omap_bo_from_dmabuf (dev, fd_copy);
+      vpebuf->v4l2_buf.length = 1;      //don't know if this is correct.  
       //It's set to the number of elements in the planes array, which gets set by the driver to the proper size later
       vpebuf->v4l2_buf.m.planes[0].m.fd = fd_copy;
       break;

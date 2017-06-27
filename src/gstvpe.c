@@ -80,8 +80,7 @@ static GstStaticPadTemplate src_factory = GST_STATIC_PAD_TEMPLATE ("src",
     GST_STATIC_CAPS (GST_VIDEO_CAPS_MAKE ("NV12")
         ";" GST_VIDEO_CAPS_MAKE ("YUYV")
         ";" GST_VIDEO_CAPS_MAKE ("YUY2")
-        ";" GST_VIDEO_CAPS_MAKE ("RGB")
-        ));
+        ";" GST_VIDEO_CAPS_MAKE ("RGB")));
 
 static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
@@ -114,6 +113,8 @@ gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
   guint32 fourcc = 0;
   const gchar *fmt = NULL;
 
+  printf
+      ("gstvpe.c:gst_vpe_parse_input_caps: entered gst_vpe_parse_input_caps\n");
   GST_DEBUG_OBJECT (self, "Input caps: %s", gst_caps_to_string (input_caps));
 
   if (self->input_caps) {
@@ -204,6 +205,7 @@ gst_vpe_set_output_caps (GstVpe * self)
   }
 
   if (!self->fixed_caps) {
+    printf ("gstvpe.c:gst_vpe_set_output_caps: if(!self->fixed_caps)\n");
     if (self->input_crop.c.width && self->interlaced) {
       /* Ducati decoder had the habit of setting height as half frame hight for
        * interlaced streams */
@@ -228,11 +230,9 @@ gst_vpe_set_output_caps (GstVpe * self)
 
   gst_caps_unref (outcaps);
 
-  outcaps = gst_caps_new_simple ("video/x-raw",
-      "format", G_TYPE_STRING,
-      gst_video_format_to_string(self->output_fourcc), NULL); //expect breaks if we change this line 
-      //gst_video_format_to_string(gst_video_format_from_fourcc (self->output_fourcc)), NULL); //expect breaks if we change this line 
-      //"RGB", NULL);
+  outcaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, gst_video_format_to_string (self->output_fourcc), NULL);       //expect breaks if we change this line 
+  //gst_video_format_to_string(gst_video_format_from_fourcc (self->output_fourcc)), NULL); //expect breaks if we change this line 
+  //"RGB", NULL);
 
   out_s = gst_caps_get_structure (outcaps, 0);
 
@@ -324,12 +324,12 @@ gst_vpe_fourcc_to_pixelformat (guint32 fourcc)
     case GST_MAKE_FOURCC ('Y', 'U', 'Y', 'V'):
       return V4L2_PIX_FMT_YUYV;
     case GST_MAKE_FOURCC ('N', 'V', '1', '2'):
-      printf("gstvpe.c:gst_vpe_fourcc_to_pixelformat: entered NV12 case\n");
+      printf ("gstvpe.c:gst_vpe_fourcc_to_pixelformat: entered NV12 case\n");
       return V4L2_PIX_FMT_NV12;
     case GST_VIDEO_FORMAT_RGB:
-      printf("gstvpe.c:gst_vpe_fourcc_to_pixelformat: entered case GST_VIDEO_FORMAT_RGB\n");
+      printf
+          ("gstvpe.c:gst_vpe_fourcc_to_pixelformat: entered case GST_VIDEO_FORMAT_RGB\n");
       //enters here when in input buffers mode.
-      //case GST_MAKE_FOURCC ('R', 'G', 'B', 24):
       return V4L2_PIX_FMT_RGB24;
   }
   return -1;
@@ -391,7 +391,8 @@ gst_vpe_init_input_buffers (GstVpe * self, gint min_num_input_buffers)
       V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, self->input_caps,
       gst_vpe_alloc_inputbuffer, self);
   if (!self->input_pool) {
-    printf("gstvpe.c: gst_vpe_init_input_buffers: !self->input_pool, returning false.\n");
+    printf
+        ("gstvpe.c: gst_vpe_init_input_buffers: !self->input_pool, returning false.\n");
     return FALSE;
   }
 
@@ -402,6 +403,8 @@ gst_vpe_init_input_buffers (GstVpe * self, gint min_num_input_buffers)
 static gboolean
 gst_vpe_input_set_fmt (GstVpe * self)
 {
+  printf ("gstvpe.c:gst_vpe_input_set_fmt: entered gst_vpe_input_set_fmt\n");
+  printf ("gstvpe.c:gst_vpe_input_set_fmt: self->input_fourcc = %d\n", self->input_fourcc);     //is likely the rgb fourcc from before.
   struct v4l2_format fmt;
   int ret;
   struct v4l2_selection sel = {
@@ -417,9 +420,11 @@ gst_vpe_input_set_fmt (GstVpe * self)
   fmt.fmt.pix_mp.pixelformat =
       gst_vpe_fourcc_to_pixelformat (self->input_fourcc);
   if (self->interlaced) {
+    printf ("gstvpe.c:gst_vpe_input_set_fmt: if(self->interlaced)\n");
     fmt.fmt.pix_mp.height = (self->input_height);
     fmt.fmt.pix_mp.field = V4L2_FIELD_SEQ_TB;
   } else {
+    printf ("gstvpe.c:gst_vpe_input_set_fmt: !if(self->interlaced)\n");
     fmt.fmt.pix_mp.height = self->input_height;
     fmt.fmt.pix_mp.field = V4L2_FIELD_ANY;
   }
@@ -540,15 +545,16 @@ static gboolean
 gst_vpe_create (GstVpe * self)
 {
   if (self->dev == NULL) {
-    printf("gstvpe.c: gst_vpe_create(), self->dev == NULL, calling dce_init()...");
+    printf
+        ("gstvpe.c: gst_vpe_create(), self->dev == NULL, calling dce_init()...");
     self->dev = dce_init ();
     if (self->dev == NULL) {
-      printf("dce_init() failed, returning FALSE\n");
+      printf ("dce_init() failed, returning FALSE\n");
       GST_ERROR_OBJECT (self, "dce_init() failed");
       return FALSE;
     }
-    printf("dce_init() succeeded, returning TRUE\n");
-    GST_DEBUG_OBJECT (self, "dce_init() done");  //succeeds
+    printf ("dce_init() succeeded, returning TRUE\n");
+    GST_DEBUG_OBJECT (self, "dce_init() done"); //succeeds
   }
   return TRUE;
 }
@@ -559,13 +565,15 @@ gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
   gint min_num_input_buffers;
 
   if (!gst_vpe_create (self)) {
-    printf("gstvpe.c: gst_vpe_init_input_bufs: !gst_vpe_create(), returning FALSE\n");
+    printf
+        ("gstvpe.c: gst_vpe_init_input_bufs: !gst_vpe_create(), returning FALSE\n");
     return FALSE;
   }
 
   if (input_caps && !gst_vpe_parse_input_caps (self, input_caps)) {
     GST_ERROR_OBJECT (self, "Could not parse/set caps");
-    printf("gstvpe.c:gst_vpe_init_input_bufs: could not parse input caps, input caps were originally set as NULL, so this could be something to do with that\n");
+    printf
+        ("gstvpe.c:gst_vpe_init_input_bufs: could not parse input caps, input caps were originally set as NULL, so this could be something to do with that\n");
     //doesn't reach here
     return FALSE;
   }
@@ -581,16 +589,19 @@ gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
   GST_DEBUG_OBJECT (self, "Using min input buffers: %d", min_num_input_buffers);
   GST_DEBUG_OBJECT (self, "parse/set caps done");
   if (self->input_pool == NULL) {
-    printf("gstvpe.c:gst_vpe_init_input_bufs: self->input_pool == NULL, allocating input buffers now...\n"); //detects no input pool, creates one
+    printf ("gstvpe.c:gst_vpe_init_input_bufs: self->input_pool == NULL, allocating input buffers now...\n");   //detects no input pool, creates one
     if (!gst_vpe_init_input_buffers (self, min_num_input_buffers)) {
-      printf("gstvpe.c:gst_vpe_init_input_bufs: gst_vpe_init_input_buffers failed, returning false\n");
+      printf
+          ("gstvpe.c:gst_vpe_init_input_bufs: gst_vpe_init_input_buffers failed, returning false\n");
       GST_ERROR_OBJECT (self, "gst_vpe_init_input_buffers failed");
       return FALSE;
     }
     GST_DEBUG_OBJECT (self, "gst_vpe_init_input_buffers done");
-    printf("gstvpe.c:gst_vpe_init_input_bufs: gst_vpe_init_input_buffers done\n"); //succeeds
+    printf ("gstvpe.c:gst_vpe_init_input_bufs: gst_vpe_init_input_buffers done\n");     //succeeds
   } else {
-    printf("gstvpe.c:gst_vpe_init_input_bufs: calling gst_vpe_buffer_pool_set_min_buffer_count: min_num_input_buffers = %d\n", min_num_input_buffers);
+    printf
+        ("gstvpe.c:gst_vpe_init_input_bufs: calling gst_vpe_buffer_pool_set_min_buffer_count: min_num_input_buffers = %d\n",
+        min_num_input_buffers);
     gst_vpe_buffer_pool_set_min_buffer_count (self->input_pool,
         min_num_input_buffers);
   }
@@ -600,12 +611,13 @@ gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
 static void
 gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
 {
+  printf ("gstvpe.c:gst_vpe_set_streaming: entered gst_vpe_set_streaming\n");
   gboolean ret;
   GstBuffer *buf;
   if (streaming) {
     if (self->video_fd < 0) {
       GST_DEBUG_OBJECT (self, "Calling open(%s)", self->device);
-      self->video_fd = open (self->device, O_RDWR | O_NONBLOCK); //open vpe device
+      self->video_fd = open (self->device, O_RDWR | O_NONBLOCK);        //open vpe device
       if (self->video_fd < 0) {
         GST_ERROR_OBJECT (self, "Cant open %s", self->device);
         return;
@@ -617,14 +629,14 @@ gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
       gst_vpe_input_set_fmt (self);
       gst_vpe_output_set_fmt (self);
 
-      if (!gst_vpe_init_input_bufs (self, NULL)) { //this likely fails pretty hard.
-        printf("gstvpe.c:gst_vpe_set_streaming, gst_vpe_init_input_bufs failed.\n");
+      if (!gst_vpe_init_input_bufs (self, NULL)) {      //this likely fails pretty hard.
+        printf
+            ("gstvpe.c:gst_vpe_set_streaming, gst_vpe_init_input_bufs failed.\n");
         GST_ERROR_OBJECT (self, "gst_vpe_init_input_bufs failed");
       }
-      if (self->input_pool){
-        printf("if(self->input_pool)\n");
-        gst_vpe_buffer_pool_set_streaming (self->input_pool,
-            self->video_fd, streaming, self->interlaced); //because this doesn't receive the FALSE gboolean return value, it continues with nothing?
+      if (self->input_pool) {
+        printf ("gstvpe.c:gst_vpe_set_streaming: if(self->input_pool)\n");
+        gst_vpe_buffer_pool_set_streaming (self->input_pool, self->video_fd, streaming, self->interlaced);      //because this doesn't receive the FALSE gboolean return value, it continues with nothing?
       }
       self->output_q_processing = 0;
 
@@ -634,8 +646,8 @@ gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
         }
         GST_DEBUG_OBJECT (self, "gst_vpe_init_output_buffers done");
       }
-      if (self->output_pool){
-        printf("if(self->output_pool\n");
+      if (self->output_pool) {
+        printf ("gstvpe.c:gst_vpe_set_streaming: if(self->output_pool\n");
         gst_vpe_buffer_pool_set_streaming (self->output_pool,
             self->video_fd, streaming, FALSE);
       }
@@ -644,19 +656,21 @@ gst_vpe_set_streaming (GstVpe * self, gboolean streaming)
       GST_DEBUG_OBJECT (self, "streaming already on");
     }
   } else {
-    if (self->video_fd >= 0) { //video_fd hasn't been initialized
+    if (self->video_fd >= 0) {  //video_fd has been initialized
       while (NULL != (buf = (GstBuffer *) g_queue_pop_head (&self->input_q))) {
         gst_buffer_unref (buf);
       }
-      if (self->input_pool){
-        printf("if(self->video_fd >= 0) && if(self->input_pool)\n");
-        gst_vpe_buffer_pool_set_streaming (self->input_pool,
-            self->video_fd, streaming, self->interlaced);
+      if (self->input_pool) {
+        printf
+            ("gstvpe.c:gst_vpe_set_streaming: if(self->video_fd >= 0) && if(self->input_pool)\n");
+        gst_vpe_buffer_pool_set_streaming (self->input_pool, self->video_fd,
+            streaming, self->interlaced);
       }
-      if (self->output_pool){
-        printf("if(self->video_fd >= 0) && if(self->output_pool)\n");
-        gst_vpe_buffer_pool_set_streaming (self->output_pool,
-            self->video_fd, streaming, FALSE);
+      if (self->output_pool) {
+        printf
+            ("gstvpe.c:gst_vpe_set_streaming: if(self->video_fd >= 0) && if(self->output_pool)\n");
+        gst_vpe_buffer_pool_set_streaming (self->output_pool, self->video_fd,
+            streaming, FALSE);
       }
       close (self->video_fd);
       self->video_fd = -1;
@@ -845,10 +859,10 @@ static GstFlowReturn
 gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 {
   static int chains;
-  printf("chain accesses: %d\n", chains);
+  printf ("chain accesses: %d\n", chains);
   chains++;
 
-  GstVpe *self = GST_VPE (parent); //creates a typecast of the parent object.
+  GstVpe *self = GST_VPE (parent);      //creates a typecast of the parent object.
   gint q_cnt;
   GstVPEBufferPriv *vpe_buf;
 
@@ -858,9 +872,10 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   GST_OBJECT_LOCK (self);
   if (G_UNLIKELY (self->state != GST_VPE_ST_ACTIVE &&
           self->state != GST_VPE_ST_STREAMING)) {
-    printf("gstvpe.c:gst_vpe_chain: entered G_UNLIKELY where the VPE isn't active or streaming\n");
+    printf
+        ("gstvpe.c:gst_vpe_chain: entered G_UNLIKELY where the VPE isn't active or streaming\n");
     if (self->state == GST_VPE_ST_DEINIT) {
-      printf("GstVpe.c:gst_vpe_chain: self->state == GST_VPE_ST_DEINIT\n"); //doesn't go here
+      printf ("GstVpe.c:gst_vpe_chain: self->state == GST_VPE_ST_DEINIT\n");    //doesn't go here
       GST_OBJECT_UNLOCK (self);
       GST_WARNING_OBJECT (self,
           "Plugin is shutting down, freeing buffer: %p", buf);
@@ -876,7 +891,7 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
           self->input_crop.c.height = crop->height;
         }
       }
-      if (gst_vpe_start (self, gst_pad_get_current_caps (pad))) { //goes in here, gets input caps??
+      if (gst_vpe_start (self, gst_pad_get_current_caps (pad))) {       //goes in here, gets input caps??
         GST_OBJECT_UNLOCK (self);
         /* Set output caps, this should be done outside the lock */
         gst_pad_set_caps (self->srcpad, self->output_caps);
@@ -893,17 +908,18 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
     GST_DEBUG_OBJECT (self, "Passthrough for VPE");
     return gst_pad_push (self->srcpad, buf);
   }
-
   //fails to get vpe_buf
-  vpe_buf = gst_buffer_get_vpe_buffer_priv (self->input_pool, buf); //likely because it fails to get the input_pool? yes.  returns here on second chain call
+  vpe_buf = gst_buffer_get_vpe_buffer_priv (self->input_pool, buf);     //likely because it fails to get the input_pool? yes.  returns here on second chain call
   if (!vpe_buf) {
     GST_DEBUG_OBJECT (self, "Importing buffer not allocated by self %p", buf);
     GstBuffer *in = gst_vpe_buffer_pool_import (self->input_pool, buf); //this is the self-allocating buffer.
     if (in) {
-      printf("gstvpe.c, gst_vpe_chain: entered if(in), re-entering gst_buffer_get_vpe_buffer_priv\n");
+      printf
+          ("gstvpe.c, gst_vpe_chain: entered if(in), re-entering gst_buffer_get_vpe_buffer_priv\n");
       vpe_buf = gst_buffer_get_vpe_buffer_priv (self->input_pool, buf);
-      if(!vpe_buf){
-        printf("gstvpe.c:gst_vpe_chain, after re-entering gst_buffer_get_vpe_buffer_priv, still no vpe_buf\n");
+      if (!vpe_buf) {
+        printf
+            ("gstvpe.c:gst_vpe_chain, after re-entering gst_buffer_get_vpe_buffer_priv, still no vpe_buf\n");
       }
     }
   }
@@ -913,8 +929,9 @@ gst_vpe_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
       gst_vpe_set_streaming (self, TRUE);
       self->state = GST_VPE_ST_STREAMING;
     }
-    printf("MAX_INPUT_Q_DEPTH = 12, self->input_q_depth = %d\n", self->input_q_depth);
-    if ((MAX_INPUT_Q_DEPTH - self->input_q_depth) >= 1) { //input q depth = 8?  actually it's 0
+    printf ("MAX_INPUT_Q_DEPTH = 12, self->input_q_depth = %d\n",
+        self->input_q_depth);
+    if ((MAX_INPUT_Q_DEPTH - self->input_q_depth) >= 1) {       //input q depth = 8?  actually it's 0
       GST_DEBUG_OBJECT (self, "Push the buffer into the V4L2 driver %d",
           self->input_q_depth);
       if (TRUE != gst_vpe_buffer_pool_queue (self->input_pool, buf, &q_cnt)) {

@@ -114,7 +114,8 @@ gst_vpe_buffer_pool_new (gboolean output_port, guint max_buffer_count,
   int size;
   GstVideoInfo info;
 
-  printf("GstVpeBufferPool.c:gst_vpe_buffer_pool_new: entered gst_vpe_buffer_pool_new\n");
+  printf
+      ("GstVpeBufferPool.c:gst_vpe_buffer_pool_new: entered gst_vpe_buffer_pool_new\n");
 
   g_return_val_if_fail (caps != NULL, NULL);
 
@@ -129,8 +130,9 @@ gst_vpe_buffer_pool_new (gboolean output_port, guint max_buffer_count,
   pool->buffer_count = max_buffer_count;
   pool->min_buffer_count = min_buffer_count;
   pool->max_buffer_count = max_buffer_count;
-  printf("GstVpeBufferPool.c:gst_vpe_buffer_pool_new: pool->buffer_count = %d, pool->min_buffer_count = %d, pool->max_buffer_count = %d", 
-    pool->buffer_count, pool->min_buffer_count, pool->max_buffer_count);
+  printf
+      ("GstVpeBufferPool.c:gst_vpe_buffer_pool_new: pool->buffer_count = %d, pool->min_buffer_count = %d, pool->max_buffer_count = %d\n",
+      pool->buffer_count, pool->min_buffer_count, pool->max_buffer_count);
   pool->buf_tracking =
       (struct GstVpeBufferPoolBufTracking *) g_malloc0 (max_buffer_count *
       sizeof (struct GstVpeBufferPoolBufTracking));
@@ -453,20 +455,20 @@ gst_vpe_buffer_pool_import (GstVpeBufferPool * pool, GstBuffer * buf)
   if (!pool->shutting_down) {
     for (i = 0; i < pool->buffer_count; i++) {
       if (pool->buf_tracking[i].state == BUF_FREE) {
-        ret = pool->buf_tracking[i].buf; //not being set
+        ret = pool->buf_tracking[i].buf;        //not being set
         pool->buf_tracking[i].state = BUF_ALLOCATED;
         pool->buf_tracking[i].q_cnt = 0;
         break;
       }
       if (pool->buf_tracking[i].state == BUF_WITH_DRIVER)
         dbufs++;
-      if (r == -1 && pool->buf_tracking[i].state == BUF_UNALLOCATED){ //enters here
-        r = i; //usually set to 0.  it's set to 0
-        printf("GstVpeBufferPool.c: gst_vpe_buffer_import: r = %d\n", r);
+      if (r == -1 && pool->buf_tracking[i].state == BUF_UNALLOCATED) {  //enters here
+        r = i;                  //usually set to 0.  it's set to 0
+        printf ("GstVpeBufferPool.c: gst_vpe_buffer_import: r = %d\n", r);
       }
     }
     /*Check fd mem */
-    if (NULL == ret && r != -1) { //enters here
+    if (NULL == ret && r != -1) {       //enters here
       if (!pool->streaming || dbufs < 4) {
         VPE_WARNING ("Allocating a new input buffer index: %d/%d, %d",
             r, pool->buffer_count, dbufs);
@@ -479,7 +481,7 @@ gst_vpe_buffer_pool_import (GstVpeBufferPool * pool, GstBuffer * buf)
           pool->buf_tracking[r].buf = ret;
           pool->buf_tracking[r].state = BUF_ALLOCATED;
           pool->buf_tracking[r].q_cnt = 0;
-          VPE_DEBUG ("New buffer allocated, index: %d", r); //enters here
+          VPE_DEBUG ("New buffer allocated, index: %d", r);     //enters here
           i = r;
         }
       }
@@ -557,7 +559,7 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
   struct v4l2_buffer buffer;
   struct v4l2_plane buf_planes[2];
   int req_buf_count;
-  GstVPEBufferPriv *vbuf; //added initial condition
+  GstVPEBufferPriv *vbuf;       //added initial condition
 
 
   GST_VPE_BUFFER_POOL_LOCK (pool);
@@ -587,19 +589,18 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
       goto DONE;
     }
 
-    vbuf = gst_buffer_get_vpe_buffer_priv (pool, pool->buf_tracking[0].buf); //gets appropriately sized buffer from gstvpebuffer.c
-    if(vbuf != NULL){
-      printf("gstvpebufferpool:586, vbuf size = %d\n", vbuf->size);
-    }
-    else{
-      printf("gstvpebufferpool:586, vbuf == NULL\n"); //debug code
+    vbuf = gst_buffer_get_vpe_buffer_priv (pool, pool->buf_tracking[0].buf);    //gets appropriately sized buffer from gstvpebuffer.c
+    if (vbuf != NULL) {
+      printf ("gstvpebufferpool:586, vbuf size = %d\n", vbuf->size);
+    } else {
+      printf ("gstvpebufferpool:586, vbuf == NULL\n");  //debug code
     }
     buffer = vbuf->v4l2_buf;
     buffer.m.planes = buf_planes;
     buf_planes[0] = vbuf->v4l2_planes[0];
     buf_planes[1] = vbuf->v4l2_planes[1];
 
-    printf("gstvpebufferpool.c:gst_vpe_buffer_pool_set_streaming: req_buf_count: %d, reqbuf.count: %d\n", req_buf_count, reqbuf.count);//debug code
+    printf ("gstvpebufferpool.c:gst_vpe_buffer_pool_set_streaming: req_buf_count: %d, reqbuf.count: %d\n", req_buf_count, reqbuf.count);        //debug code
     for (i = 0; i < req_buf_count; i++) {
       //printf("gstvpebufferpool.c:gst_vpe_buffer_pool_set_streaming: &buffer: %p\n", buffer); //debug code
       buffer.index = i;
@@ -607,7 +608,7 @@ gst_vpe_buffer_pool_set_streaming (GstVpeBufferPool * pool, int video_fd,
       ret = ioctl (pool->video_fd, VIDIOC_QUERYBUF, &buffer);
       if (ret < 0) {
         VPE_ERROR ("Cant query buffers");
-        fprintf(stderr, "buffer query error: %s\n", strerror(errno));
+        fprintf (stderr, "buffer query error: %s\n", strerror (errno));
         return FALSE;
       }
       VPE_DEBUG ("query buf %s, index = %d, fd = %d, plane[0], size = %d, "
