@@ -168,6 +168,8 @@ gst_vpe_parse_input_caps (GstVpe * self, GstCaps * input_caps)
 static gboolean
 gst_vpe_set_output_caps (GstVpe * self)
 {
+  printf
+      ("gstvpe.c:gst_vpe_set_output_caps: entered gst_vpe_set_output_caps\n");
   GstCaps *outcaps;
   GstStructure *s, *out_s;
   gint fps_n, fps_d;
@@ -230,9 +232,12 @@ gst_vpe_set_output_caps (GstVpe * self)
 
   gst_caps_unref (outcaps);
 
-  outcaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, gst_video_format_to_string (self->output_fourcc), NULL);       //expect breaks if we change this line 
-  //gst_video_format_to_string(gst_video_format_from_fourcc (self->output_fourcc)), NULL); //expect breaks if we change this line 
-  //"RGB", NULL);
+  outcaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, "RGB", NULL);  //this forces it to be RGB?
+  //outcaps = gst_caps_new_simple ("video/x-raw", "format", G_TYPE_STRING, gst_video_format_to_string (self->output_fourcc), NULL); //first modified implementation.
+  /*  outcaps = gst_caps_new_simple ("video/x-raw",
+     "format", G_TYPE_STRING,
+     gst_video_format_to_string
+     (gst_video_format_from_fourcc (self->output_fourcc)), NULL); *///original implementation
 
   out_s = gst_caps_get_structure (outcaps, 0);
 
@@ -329,7 +334,6 @@ gst_vpe_fourcc_to_pixelformat (guint32 fourcc)
     case GST_VIDEO_FORMAT_RGB:
       printf
           ("gstvpe.c:gst_vpe_fourcc_to_pixelformat: entered case GST_VIDEO_FORMAT_RGB\n");
-      //enters here when in input buffers mode.
       return V4L2_PIX_FMT_RGB24;
   }
   return -1;
@@ -338,6 +342,7 @@ gst_vpe_fourcc_to_pixelformat (guint32 fourcc)
 static gboolean
 gst_vpe_output_set_fmt (GstVpe * self)
 {
+  printf ("gstvpe.c:gst_vpe_output_set_fmt: entered gst_vpe_output_set_fmt\n");
   struct v4l2_format fmt;
   int ret;
   // V4L2 Stuff
@@ -345,6 +350,8 @@ gst_vpe_output_set_fmt (GstVpe * self)
   fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
   fmt.fmt.pix_mp.width = self->output_width;
   fmt.fmt.pix_mp.height = self->output_height;
+  printf ("gstvpe.c:gst_vpe_output_set_fmt: self->output_fourcc = %d\n",
+      self->output_fourcc);
   fmt.fmt.pix_mp.pixelformat =
       gst_vpe_fourcc_to_pixelformat (self->output_fourcc);
   fmt.fmt.pix_mp.field = V4L2_FIELD_ANY;
@@ -577,6 +584,10 @@ gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
     //doesn't reach here
     return FALSE;
   }
+
+  printf
+      ("gstvpe.c: gst_vpe_init_input_bufs: num_input_buffers = %d, input_max_ref_frames = %d\n",
+      self->num_input_buffers, self->input_max_ref_frames);
   if (self->num_input_buffers) {
     min_num_input_buffers = self->num_input_buffers;
   } else if (self->input_max_ref_frames) {
@@ -600,8 +611,8 @@ gst_vpe_init_input_bufs (GstVpe * self, GstCaps * input_caps)
     printf ("gstvpe.c:gst_vpe_init_input_bufs: gst_vpe_init_input_buffers done\n");     //succeeds
   } else {
     printf
-        ("gstvpe.c:gst_vpe_init_input_bufs: calling gst_vpe_buffer_pool_set_min_buffer_count: min_num_input_buffers = %d\n",
-        min_num_input_buffers);
+        ("gstvpe.c:gst_vpe_init_input_bufs: self->num_input_buffers = %d, self->input_max_ref_frames = %d\n",
+        self->num_input_buffers, self->input_max_ref_frames);
     gst_vpe_buffer_pool_set_min_buffer_count (self->input_pool,
         min_num_input_buffers);
   }

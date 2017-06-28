@@ -32,22 +32,27 @@ gst_buffer_get_vpe_buffer_priv (GstVpeBufferPool * pool, GstBuffer * buf)
   GstMemory *mem;
   GstVPEBufferPriv *vpemeta;
 
-  printf ("GstVpeBufferPool->vpebufferpriv: %p, GstBuffer: %p\n",
+  printf
+      ("gstvpebuffer.c: gst_buffer_get_vpe_buffer_priv: GstVpeBufferPool->vpebufferpriv: %p, GstBuffer: %p\n",
       pool->vpebufferpriv, buf);
   mem = gst_buffer_peek_memory (buf, 0);
   if (mem == NULL) {
-    printf ("gstvpebuffer.c: failed to peek into gstbuffer\n");
+    printf
+        ("gstvpebuffer.c:gst_buffer_get_vpe_buffer_priv:  failed to peek into gstbuffer\n");
   }
 
   fd_copy = gst_fd_memory_get_fd (mem);
-  printf ("gstvpebuffer.c: fd_copy: %d\n", fd_copy);
+  printf ("gstvpebuffer.c:gst_buffer_get_vpe_buffer_priv:  fd_copy: %d\n",
+      fd_copy);
   if (fd_copy == 0) {
-    printf ("gstvpebuffer.c: did not receive fd_copy\n");
+    printf
+        ("gstvpebuffer.c:gst_buffer_get_vpe_buffer_priv:  did not receive fd_copy\n");
   }
-
+  //THIS IS WHERE THE CODE FAILS???
   vpemeta = g_hash_table_lookup (pool->vpebufferpriv, (gpointer) fd_copy);
   if (vpemeta == NULL) {
-    printf ("gstvpebuffer.c: did not receive vpemeta\n");
+    printf
+        ("gstvpebuffer.c:gst_buffer_get_vpe_buffer_priv:  did not receive vpemeta\n");
   }
   return vpemeta;
 }
